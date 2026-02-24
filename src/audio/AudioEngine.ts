@@ -118,4 +118,109 @@ export class AudioEngine {
   get sampleRate(): number {
     return this.ctx.sampleRate;
   }
+
+  /* ═══════════════════════════════════════════════════════════════
+   * Phase 3 — Loop Coordination, Tempo, Play Mode, Bounce
+   * ═══════════════════════════════════════════════════════════════ */
+
+  /* Tempo & Time Signature */
+  private _tempo = 120;
+  private _timeSignature = 4; // beats per measure
+
+  get tempo(): number { return this._tempo; }
+  set tempo(bpm: number) { this._tempo = Math.max(40, Math.min(300, bpm)); }
+
+  get timeSignature(): number { return this._timeSignature; }
+  set timeSignature(ts: number) { this._timeSignature = Math.max(1, Math.min(15, ts)); }
+
+  get samplesPerBeat(): number {
+    return Math.round((60 / this._tempo) * this.sampleRate);
+  }
+
+  get samplesPerMeasure(): number {
+    return this.samplesPerBeat * this._timeSignature;
+  }
+
+  /* Master Loop (established by first loop-synced recording) */
+  private _masterLoopLengthSamples = 0;
+  private _masterLoopStartTime = 0;
+
+  get masterLoopLengthSamples(): number { return this._masterLoopLengthSamples; }
+
+  setMasterLoopLength(samples: number): void {
+    this._masterLoopLengthSamples = samples;
+  }
+
+  setMasterLoopStartTime(time: number): void {
+    this._masterLoopStartTime = time;
+  }
+
+  /** Get current position within the master loop (0–1 normalized). */
+  getMasterLoopPosition(): number {
+    if (this._masterLoopLengthSamples === 0) return 0;
+    const elapsed = this.ctx.currentTime - this._masterLoopStartTime;
+    const loopDuration = this._masterLoopLengthSamples / this.sampleRate;
+    if (loopDuration <= 0) return 0;
+    return (elapsed % loopDuration) / loopDuration;
+  }
+
+  /** Reset master loop (e.g. when all tracks are cleared). */
+  resetMasterLoop(): void {
+    this._masterLoopLengthSamples = 0;
+    this._masterLoopStartTime = 0;
+  }
+
+  /* Play Mode */
+  private _playMode: 'multi' | 'single' = 'multi';
+  get playMode(): 'multi' | 'single' { return this._playMode; }
+  set playMode(mode: 'multi' | 'single') { this._playMode = mode; }
+
+  /* Track Registration (for bounce & cross-track coordination) */
+  private trackOutputNodes: Map<number, { node: AudioNode; getState: () => string }> = new Map();
+
+  /** Register a track's output node and state getter (called from LoopTrack constructor). */
+  registerTrack(id: number, outputNode: AudioNode, getState: () => string): void {
+    this.trackOutputNodes.set(id, { node: outputNode, getState });
+  }
+
+  /** Get output nodes of other tracks that are currently playing (for bounce). */
+  getOtherTrackOutputNodes(excludeId: number): AudioNode[] {
+    const nodes: AudioNode[] = [];
+    for (const [id, info] of this.trackOutputNodes) {
+      if (id !== excludeId) {
+        const state = info.getState();
+        if (state === 'playing' || state === 'overdubbing') {
+          nodes.push(info.node);
+        }
+      }
+    }
+    return nodes;
+  }
+
+  /* Quantize Helpers */
+
+  /** Calculate the AudioContext time of the next measure boundary. */
+  quantizeToNextMeasure(): number {
+    const measureDuration = this.samplesPerMeasure / this.sampleRate;
+    if (measureDuration <= 0) return this.ctx.currentTime;
+
+    if (this._masterLoopLengthSamples > 0) {
+      const loopDuration = this._masterLoopLengthSamples / this.sampleRate;
+      const elapsed = this.ctx.currentTime - this._masterLoopStartTime;
+      const pos = ((elapsed % loopDuration) + loopDuration) % loopDuration;
+      const nextBoundary = Math.ceil(pos / measureDuration) * measureDuration;
+      const delay = nextBoundary - pos;
+      return this.ctx.currentTime + (delay < 0.01 ? measureDuration : delay);
+    }
+
+    // No master loop — use absolute time
+    return this.ctx.currentTime + measureDuration;
+  }
+
+  /** Snap a sample length to the nearest whole number of measures. */
+  quantizeLengthToMeasures(lengthSamples: number): number {
+    const spm = this.samplesPerMeasure;
+    if (spm <= 0) return lengthSamples;
+    return Math.max(spm, Math.round(lengthSamples / spm) * spm);
+  }
 }

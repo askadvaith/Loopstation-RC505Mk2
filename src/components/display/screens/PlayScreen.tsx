@@ -8,22 +8,30 @@ import { useTrackStore } from '../../../store/useTrackStore';
 
 const STATE_COLOR: Record<string, string> = {
   empty: '#52525b',
+  'rec-standby': '#ff2d2d',
   recording: '#ff2d2d',
   playing: '#22c55e',
   overdubbing: '#eab308',
   stopped: '#a1a1aa',
+  'fading-out': '#71717a',
+  'stopping-at-loop-end': '#71717a',
 };
 
 const STATE_LABEL: Record<string, string> = {
   empty: '---',
+  'rec-standby': 'STB',
   recording: 'REC',
   playing: 'PLY',
   overdubbing: 'OVR',
   stopped: 'STP',
+  'fading-out': 'FDE',
+  'stopping-at-loop-end': 'END',
 };
 
 export function PlayScreen() {
   const tempo = useTransportStore((s) => s.tempo);
+  const timeSignature = useTransportStore((s) => s.timeSignature);
+  const playMode = useTransportStore((s) => s.playMode);
   const currentMemory = useTransportStore((s) => s.currentMemory);
   const micConnected = useTransportStore((s) => s.micConnected);
   const tracks = useTrackStore((s) => s.tracks);
@@ -64,8 +72,10 @@ export function PlayScreen() {
           </span>
           <span className="text-xs text-zinc-500 font-medium">BPM</span>
         </div>
-        <div className="text-[10px] text-zinc-600 mt-1">
-          4/4
+        <div className="text-[10px] text-zinc-600 mt-1 flex items-center gap-2">
+          <span>{timeSignature}/4</span>
+          <span className="text-[8px]">•</span>
+          <span className="text-[8px]">{playMode === 'single' ? 'SINGLE' : 'MULTI'}</span>
         </div>
       </div>
 

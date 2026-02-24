@@ -17,18 +17,24 @@ interface LoopIndicatorProps {
 
 const STATE_GLOW: Record<string, string> = {
   recording: 'rgba(255, 45, 45, 0.4)',
+  'rec-standby': 'rgba(255, 45, 45, 0.2)',
   playing: 'rgba(34, 197, 94, 0.3)',
   overdubbing: 'rgba(234, 179, 8, 0.3)',
   stopped: 'transparent',
   empty: 'transparent',
+  'fading-out': 'rgba(161, 161, 170, 0.2)',
+  'stopping-at-loop-end': 'rgba(161, 161, 170, 0.2)',
 };
 
 const STATE_BAR_COLOR: Record<string, string> = {
   recording: '#ff2d2d',
+  'rec-standby': '#ff2d2d',
   playing: '#22c55e',
   overdubbing: '#eab308',
   stopped: '#71717a',
   empty: '#3f3f46',
+  'fading-out': '#71717a',
+  'stopping-at-loop-end': '#71717a',
 };
 
 export function LoopIndicator({ position, state, hasPhrase, duration }: LoopIndicatorProps) {
@@ -44,7 +50,7 @@ export function LoopIndicator({ position, state, hasPhrase, duration }: LoopIndi
     });
   }, [hasPhrase, duration]);
 
-  const isActive = state === 'playing' || state === 'recording' || state === 'overdubbing';
+  const isActive = state === 'playing' || state === 'recording' || state === 'overdubbing' || state === 'fading-out' || state === 'stopping-at-loop-end';
 
   return (
     <div

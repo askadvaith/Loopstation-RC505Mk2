@@ -34,6 +34,11 @@ export function MainPanel() {
     redoTrack,
     setTrackVolume,
     setTrackPan,
+    updateTrackSettings,
+    setMarkTrack,
+    // clearMarkTrack available via controls if needed
+    markBackTrack,
+    recBackTrack,
     allStartStop,
     allClear,
   } = controls;
@@ -139,7 +144,7 @@ export function MainPanel() {
 
         {/* Display (central) */}
         <div className="flex-[2] min-w-[280px]">
-          <Display />
+          <Display onUpdateSettings={updateTrackSettings} />
         </div>
 
         {/* Parameter Knobs + Output Level */}
@@ -179,6 +184,7 @@ export function MainPanel() {
                 onStop={stopTrack}
                 onClear={clearTrack}
                 onVolumeChange={setTrackVolume}
+                onUpdateSettings={updateTrackSettings}
               />
             </div>
           ))}
@@ -191,6 +197,9 @@ export function MainPanel() {
             onAllClear={allClear}
             onUndo={undoTrack}
             onRedo={redoTrack}
+            onMarkSet={setMarkTrack}
+            onMarkBack={markBackTrack}
+            onRecBack={recBackTrack}
           />
         </div>
       </div>
@@ -204,6 +213,10 @@ export function MainPanel() {
           { key: 'Space', action: 'All Start/Stop' },
           { key: 'Z', action: 'Undo' },
           { key: 'X', action: 'Redo' },
+          { key: 'D', action: 'Dub mode' },
+          { key: 'O', action: '1-Shot' },
+          { key: 'M', action: 'Mark' },
+          { key: 'B', action: 'Rec Back' },
         ].map((shortcut) => (
           <span key={shortcut.key} className="text-[8px] text-zinc-700 flex items-center gap-1">
             <kbd className="px-1 py-0.5 bg-zinc-800/60 rounded text-zinc-500 font-mono text-[7px] border border-zinc-700/50">

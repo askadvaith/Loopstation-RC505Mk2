@@ -7,10 +7,13 @@ import { useTrackStore } from '../../../store/useTrackStore';
 
 const STATE_COLOR: Record<string, string> = {
   empty: '#3f3f46',
+  'rec-standby': '#ff2d2d',
   recording: '#ff2d2d',
   playing: '#22c55e',
   overdubbing: '#eab308',
   stopped: '#71717a',
+  'fading-out': '#71717a',
+  'stopping-at-loop-end': '#71717a',
 };
 
 export function MixerScreen() {
