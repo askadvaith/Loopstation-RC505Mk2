@@ -1,20 +1,20 @@
 @import "tailwindcss";
 
 :root {
-  /* Hardware color palette */
-  --panel-bg: #1a1a1e;
-  --panel-surface: #232328;
-  --panel-border: #333338;
+  /* Hardware color palette — RC-505 MK2 */
+  --panel-bg: #131316;
+  --panel-surface: #1e1e23;
+  --panel-border: #2a2a30;
   --led-red: #ff2d2d;
   --led-green: #22c55e;
   --led-yellow: #eab308;
   --led-blue: #3b82f6;
   --led-pink: #ec4899;
-  --lcd-bg: #0a1628;
+  --lcd-bg: #070e1d;
   --lcd-text: #7dd3fc;
   --knob-bg: #2a2a30;
   --knob-indicator: #f8fafc;
-  --slider-track: #3f3f46;
+  --slider-track: #27272a;
   --slider-fill: #7dd3fc;
 }
 
@@ -39,7 +39,7 @@ body {
   overflow: hidden;
 }
 
-/* LED glow effects */
+/* ─── LED Glow Effects ─── */
 .led-glow-red {
   box-shadow: 0 0 6px 2px var(--led-red), inset 0 0 3px 1px rgba(255, 45, 45, 0.3);
 }
@@ -53,25 +53,168 @@ body {
   box-shadow: 0 0 6px 2px var(--led-blue), inset 0 0 3px 1px rgba(59, 130, 246, 0.3);
 }
 
-/* Button base styles */
+/* ─── Main Panel — Metal Finish ─── */
+.main-panel {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(255,255,255,0.02) 0%, transparent 60%),
+    linear-gradient(180deg, #16161a 0%, var(--panel-bg) 100%);
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* ─── Button Styles ─── */
 .hw-button {
   border: 1px solid var(--panel-border);
-  border-radius: 4px;
-  background: var(--panel-surface);
+  border-radius: 6px;
+  background: linear-gradient(180deg, #28282e 0%, #1c1c22 100%);
   color: #e4e4e7;
   cursor: pointer;
-  transition: background 0.1s, box-shadow 0.1s;
+  transition: background 0.1s, box-shadow 0.1s, transform 0.05s;
   user-select: none;
 }
 .hw-button:hover {
-  background: #2d2d33;
+  background: linear-gradient(180deg, #32323a 0%, #24242a 100%);
 }
 .hw-button:active {
-  background: #1f1f24;
+  background: linear-gradient(180deg, #1a1a20 0%, #16161c 100%);
   transform: translateY(1px);
+  box-shadow: inset 0 1px 3px rgba(0,0,0,0.4);
+}
+.hw-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
 }
 
-/* Slider track styling */
+/* ─── Start Button (splash screen) ─── */
+.start-button {
+  background: linear-gradient(180deg, #1a2238 0%, #0f172a 100%);
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.start-button:hover {
+  background: linear-gradient(180deg, #1e2940 0%, #131d33 100%);
+  box-shadow: 0 0 30px rgba(59, 130, 246, 0.15), 0 0 60px rgba(59, 130, 246, 0.05);
+}
+.start-button:active {
+  transform: scale(0.98);
+}
+
+/* ─── Track Main Button States ─── */
+.track-main-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  position: relative;
+}
+.track-main-btn > div {
+  border: 2px solid var(--panel-border);
+  box-shadow:
+    0 2px 8px rgba(0,0,0,0.3),
+    inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+/* Idle */
+.track-btn-idle {
+  background: linear-gradient(180deg, #2a2a32 0%, #1e1e24 100%);
+  color: #71717a;
+}
+.track-btn-idle:hover {
+  background: linear-gradient(180deg, #32323a 0%, #26262c 100%);
+  color: #a1a1aa;
+}
+
+/* Recording */
+.track-btn-rec {
+  background: radial-gradient(circle at 50% 40%, #ff2d2d, #991b1b);
+  color: white;
+  border-color: rgba(255, 45, 45, 0.5) !important;
+  box-shadow:
+    0 0 16px rgba(255, 45, 45, 0.4),
+    0 0 32px rgba(255, 45, 45, 0.15),
+    inset 0 1px 0 rgba(255,255,255,0.15) !important;
+  animation: pulse-rec 1s ease-in-out infinite;
+}
+
+/* Playing */
+.track-btn-play {
+  background: radial-gradient(circle at 50% 40%, #22c55e, #15803d);
+  color: white;
+  border-color: rgba(34, 197, 94, 0.5) !important;
+  box-shadow:
+    0 0 16px rgba(34, 197, 94, 0.3),
+    0 0 32px rgba(34, 197, 94, 0.1),
+    inset 0 1px 0 rgba(255,255,255,0.15) !important;
+}
+
+/* Overdubbing */
+.track-btn-odub {
+  background: radial-gradient(circle at 50% 40%, #eab308, #a16207);
+  color: #1c1917;
+  border-color: rgba(234, 179, 8, 0.5) !important;
+  box-shadow:
+    0 0 16px rgba(234, 179, 8, 0.4),
+    0 0 32px rgba(234, 179, 8, 0.15),
+    inset 0 1px 0 rgba(255,255,255,0.15) !important;
+  animation: pulse-odub 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse-rec {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+
+@keyframes pulse-odub {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.88; }
+}
+
+/* ─── Transport Main Button ─── */
+.transport-btn-main {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #28282e 0%, #1a1a20 100%);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.transport-btn-main:hover {
+  background: linear-gradient(180deg, #32323a 0%, #22222a 100%);
+}
+.transport-btn-main:active {
+  transform: translateY(1px);
+  background: linear-gradient(180deg, #1a1a20 0%, #141418 100%);
+}
+
+/* ─── Track Strip ─── */
+.track-strip {
+  background: linear-gradient(180deg, #1e1e23 0%, #191920 100%);
+  box-shadow:
+    0 1px 4px rgba(0,0,0,0.2),
+    inset 0 1px 0 rgba(255,255,255,0.02);
+}
+
+/* ─── Display Container ─── */
+.display-container {
+  min-height: 180px;
+}
+
+/* ─── Vertical Slider (for track faders) ─── */
+.track-slider-input {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: grab;
+  opacity: 0;
+  z-index: 10;
+}
+.track-slider-input:active {
+  cursor: grabbing;
+}
+
+/* Standard range input (horizontal) */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
@@ -80,15 +223,37 @@ input[type="range"] {
 }
 input[type="range"]::-webkit-slider-track {
   background: var(--slider-track);
-  height: 6px;
-  border-radius: 3px;
+  height: 4px;
+  border-radius: 2px;
+  border: none;
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  height: 20px;
-  width: 12px;
-  background: #a1a1aa;
+  height: 16px;
+  width: 10px;
+  background: linear-gradient(180deg, #a1a1aa, #71717a);
   border-radius: 3px;
-  margin-top: -7px;
+  margin-top: -6px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+input[type="range"]::-moz-range-track {
+  background: var(--slider-track);
+  height: 4px;
+  border-radius: 2px;
+  border: none;
+}
+input[type="range"]::-moz-range-thumb {
+  height: 16px;
+  width: 10px;
+  background: linear-gradient(180deg, #a1a1aa, #71717a);
+  border-radius: 3px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* ─── Utility: tabular numbers ─── */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
