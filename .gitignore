@@ -1,7 +1,7 @@
 # Virtual env
 .venv
 venv
-env
+
 
 # Logs
 logs
