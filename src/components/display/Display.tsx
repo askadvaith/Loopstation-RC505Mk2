@@ -1,81 +1,102 @@
 /**
- * Display — Central LCD-style display showing key information.
+ * Display — Central LCD-style display matching the RC-505 MK2 hardware screen.
+ *
+ * Supports multiple screen views:
+ * - PLAY: Main play screen with tempo and track overview
+ * - MIXER: Level meters and pan for all tracks
+ * - TRACK: Detailed track parameter editing
+ *
+ * Screen switching via < > buttons (maps to [◄] [►] on hardware).
  */
 
-import { useTransportStore } from '../../store/useTransportStore';
-import { useTrackStore } from '../../store/useTrackStore';
+import { useState } from 'react';
+import { PlayScreen } from './screens/PlayScreen';
+import { MixerScreen } from './screens/MixerScreen';
+import { TrackEditScreen } from './screens/TrackEditScreen';
 
-const STATE_COLORS: Record<string, string> = {
-  empty: 'text-zinc-600',
-  recording: 'text-red-400',
-  playing: 'text-green-400',
-  overdubbing: 'text-yellow-400',
-  stopped: 'text-zinc-400',
-};
+type ScreenId = 'play' | 'mixer' | 'track';
+
+const SCREENS: { id: ScreenId; label: string }[] = [
+  { id: 'play', label: 'PLAY' },
+  { id: 'mixer', label: 'MIXER' },
+  { id: 'track', label: 'TRACK' },
+];
 
 export function Display() {
-  const tempo = useTransportStore((s) => s.tempo);
-  const currentMemory = useTransportStore((s) => s.currentMemory);
-  const micConnected = useTransportStore((s) => s.micConnected);
-  const audioReady = useTransportStore((s) => s.audioReady);
-  const tracks = useTrackStore((s) => s.tracks);
-  const currentTrack = useTrackStore((s) => s.currentTrack);
+  const [screenIdx, setScreenIdx] = useState(0);
+  const currentScreen = SCREENS[screenIdx];
+
+  const prevScreen = () => setScreenIdx((i) => (i - 1 + SCREENS.length) % SCREENS.length);
+  const nextScreen = () => setScreenIdx((i) => (i + 1) % SCREENS.length);
 
   return (
-    <div className="bg-[var(--lcd-bg)] border border-[var(--panel-border)] rounded-lg p-4 font-mono min-h-[140px]">
-      {/* Header row */}
-      <div className="flex items-center justify-between text-[10px] text-zinc-500 mb-2">
-        <span>
-          MEM {String(currentMemory).padStart(2, '0')}
-        </span>
-        <span className="flex items-center gap-2">
-          <span className={micConnected ? 'text-green-400' : 'text-red-400'}>
-            MIC {micConnected ? 'ON' : 'OFF'}
-          </span>
-          <span className={audioReady ? 'text-green-400' : 'text-zinc-600'}>
-            {audioReady ? 'READY' : 'INIT'}
-          </span>
-        </span>
+    <div className="display-container flex flex-col">
+      {/* LCD Screen */}
+      <div
+        className="relative rounded-lg overflow-hidden flex-1"
+        style={{
+          background: 'var(--lcd-bg)',
+          border: '1px solid var(--panel-border)',
+          boxShadow: `
+            inset 0 1px 8px rgba(0, 0, 0, 0.6),
+            0 1px 0 rgba(255, 255, 255, 0.03)
+          `,
+          minHeight: 160,
+        }}
+      >
+        {/* Scanline overlay for CRT/LCD effect */}
+        <div
+          className="absolute inset-0 pointer-events-none z-10"
+          style={{
+            backgroundImage:
+              'repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.08) 2px, rgba(0,0,0,0.08) 4px)',
+          }}
+        />
+
+        {/* Screen content */}
+        <div className="relative z-0 p-3 h-full font-mono">
+          {currentScreen.id === 'play' && <PlayScreen />}
+          {currentScreen.id === 'mixer' && <MixerScreen />}
+          {currentScreen.id === 'track' && <TrackEditScreen />}
+        </div>
       </div>
 
-      {/* Tempo */}
-      <div className="text-center mb-3">
-        <span className="text-3xl text-[var(--lcd-text)] font-bold">
-          {tempo.toFixed(1)}
-        </span>
-        <span className="text-xs text-zinc-500 ml-1">BPM</span>
-      </div>
+      {/* Navigation strip below display */}
+      <div className="flex items-center justify-between mt-2 px-1">
+        {/* Left nav button */}
+        <button
+          className="hw-button px-2 py-1 text-[10px] font-bold text-zinc-500 hover:text-zinc-300"
+          onClick={prevScreen}
+          title="Previous screen [←]"
+        >
+          ◄
+        </button>
 
-      {/* Track status row */}
-      <div className="flex justify-center gap-3">
-        {tracks.map((t, i) => (
-          <div
-            key={i}
-            className={`flex flex-col items-center ${
-              currentTrack === i ? 'opacity-100' : 'opacity-60'
-            }`}
-          >
-            <span className="text-[9px] text-zinc-500">T{i + 1}</span>
-            <span className={`text-xs font-bold ${STATE_COLORS[t.state]}`}>
-              {t.state === 'empty'
-                ? '---'
-                : t.state === 'recording'
-                  ? 'REC'
-                  : t.state === 'playing'
-                    ? 'PLY'
-                    : t.state === 'overdubbing'
-                      ? 'OVR'
-                      : 'STP'}
-            </span>
-            {/* Mini position bar */}
-            <div className="w-8 h-1 bg-zinc-800 rounded-full mt-1 overflow-hidden">
-              <div
-                className="h-full bg-[var(--lcd-text)]"
-                style={{ width: `${(t.playbackPosition * 100).toFixed(0)}%` }}
-              />
-            </div>
-          </div>
-        ))}
+        {/* Screen indicators */}
+        <div className="flex items-center gap-3">
+          {SCREENS.map((s, i) => (
+            <button
+              key={s.id}
+              className={`text-[9px] font-bold tracking-wider transition-colors ${
+                i === screenIdx
+                  ? 'text-[var(--lcd-text)]'
+                  : 'text-zinc-600 hover:text-zinc-400'
+              }`}
+              onClick={() => setScreenIdx(i)}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Right nav button */}
+        <button
+          className="hw-button px-2 py-1 text-[10px] font-bold text-zinc-500 hover:text-zinc-300"
+          onClick={nextScreen}
+          title="Next screen [→]"
+        >
+          ►
+        </button>
       </div>
     </div>
   );
