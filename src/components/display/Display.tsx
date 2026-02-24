@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { PlayScreen } from './screens/PlayScreen';
 import { MixerScreen } from './screens/MixerScreen';
 import { TrackEditScreen } from './screens/TrackEditScreen';
+import type { TrackSettings } from '../../audio/LoopTrack';
 
 type ScreenId = 'play' | 'mixer' | 'track';
 
@@ -22,7 +23,11 @@ const SCREENS: { id: ScreenId; label: string }[] = [
   { id: 'track', label: 'TRACK' },
 ];
 
-export function Display() {
+interface DisplayProps {
+  onUpdateSettings?: (idx: number, settings: Partial<TrackSettings>) => void;
+}
+
+export function Display({ onUpdateSettings }: DisplayProps) {
   const [screenIdx, setScreenIdx] = useState(0);
   const currentScreen = SCREENS[screenIdx];
 
@@ -57,7 +62,7 @@ export function Display() {
         <div className="relative z-0 p-3 h-full font-mono">
           {currentScreen.id === 'play' && <PlayScreen />}
           {currentScreen.id === 'mixer' && <MixerScreen />}
-          {currentScreen.id === 'track' && <TrackEditScreen />}
+          {currentScreen.id === 'track' && <TrackEditScreen onUpdateSettings={onUpdateSettings} />}
         </div>
       </div>
 

@@ -18,6 +18,9 @@ interface TransportControlsProps {
   onAllClear: () => void;
   onUndo: (idx: number) => void;
   onRedo: (idx: number) => void;
+  onMarkSet: (idx: number) => void;
+  onMarkBack: (idx: number) => void;
+  onRecBack: (idx: number) => void;
 }
 
 export function TransportControls({
@@ -25,6 +28,9 @@ export function TransportControls({
   onAllClear,
   onUndo,
   onRedo,
+  onMarkSet,
+  onMarkBack,
+  onRecBack,
 }: TransportControlsProps) {
   const tempo = useTransportStore((s) => s.tempo);
   const setTempo = useTransportStore((s) => s.setTempo);
@@ -36,7 +42,7 @@ export function TransportControls({
 
   // Check if any track is active
   const anyActive = tracks.some(
-    (t) => t.state === 'playing' || t.state === 'recording' || t.state === 'overdubbing'
+    (t) => t.state === 'playing' || t.state === 'recording' || t.state === 'overdubbing' || t.state === 'rec-standby'
   );
 
   /* ── Tap Tempo ── */
@@ -131,6 +137,40 @@ export function TransportControls({
           <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
             <path d="M6 1L9 4.5L6 8V6C3.5 6 2 6.5 1 9C1 5.5 3 3.5 6 3.5V1Z" />
           </svg>
+        </button>
+      </div>
+
+      {/* ── MARK / REC BACK ── */}
+      <div className="flex gap-2">
+        <button
+          className={`hw-button flex-1 py-1.5 text-[9px] font-bold tracking-wider flex items-center justify-center ${
+            trackState.hasPhrase
+              ? 'text-[var(--lcd-text)] hover:bg-sky-900/20'
+              : 'text-zinc-600 cursor-not-allowed'
+          }`}
+          onClick={() => {
+            if (trackState.hasMark) {
+              onMarkBack(currentTrack);
+            } else {
+              onMarkSet(currentTrack);
+            }
+          }}
+          disabled={!trackState.hasPhrase}
+          title={trackState.hasMark ? 'Mark Back [Shift+M]' : 'Set Mark [M]'}
+        >
+          {trackState.hasMark ? 'M.BACK' : 'MARK'}
+        </button>
+        <button
+          className={`hw-button flex-1 py-1.5 text-[9px] font-bold tracking-wider flex items-center justify-center ${
+            trackState.hasRecBack
+              ? 'text-[var(--lcd-text)] hover:bg-sky-900/20'
+              : 'text-zinc-600 cursor-not-allowed'
+          }`}
+          onClick={() => onRecBack(currentTrack)}
+          disabled={!trackState.hasRecBack}
+          title="REC Back [B]"
+        >
+          R.BACK
         </button>
       </div>
 
