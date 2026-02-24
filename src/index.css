@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+:root {
+  /* Hardware color palette */
+  --panel-bg: #1a1a1e;
+  --panel-surface: #232328;
+  --panel-border: #333338;
+  --led-red: #ff2d2d;
+  --led-green: #22c55e;
+  --led-yellow: #eab308;
+  --led-blue: #3b82f6;
+  --led-pink: #ec4899;
+  --lcd-bg: #0a1628;
+  --lcd-text: #7dd3fc;
+  --knob-bg: #2a2a30;
+  --knob-indicator: #f8fafc;
+  --slider-track: #3f3f46;
+  --slider-fill: #7dd3fc;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--panel-bg);
+  color: #e4e4e7;
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden;
+}
+
+/* LED glow effects */
+.led-glow-red {
+  box-shadow: 0 0 6px 2px var(--led-red), inset 0 0 3px 1px rgba(255, 45, 45, 0.3);
+}
+.led-glow-green {
+  box-shadow: 0 0 6px 2px var(--led-green), inset 0 0 3px 1px rgba(34, 197, 94, 0.3);
+}
+.led-glow-yellow {
+  box-shadow: 0 0 6px 2px var(--led-yellow), inset 0 0 3px 1px rgba(234, 179, 8, 0.3);
+}
+.led-glow-blue {
+  box-shadow: 0 0 6px 2px var(--led-blue), inset 0 0 3px 1px rgba(59, 130, 246, 0.3);
+}
+
+/* Button base styles */
+.hw-button {
+  border: 1px solid var(--panel-border);
+  border-radius: 4px;
+  background: var(--panel-surface);
+  color: #e4e4e7;
+  cursor: pointer;
+  transition: background 0.1s, box-shadow 0.1s;
+  user-select: none;
+}
+.hw-button:hover {
+  background: #2d2d33;
+}
+.hw-button:active {
+  background: #1f1f24;
+  transform: translateY(1px);
+}
+
+/* Slider track styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-track {
+  background: var(--slider-track);
+  height: 6px;
+  border-radius: 3px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 20px;
+  width: 12px;
+  background: #a1a1aa;
+  border-radius: 3px;
+  margin-top: -7px;
+}
