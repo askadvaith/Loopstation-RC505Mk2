@@ -11,6 +11,7 @@ interface KnobProps {
   value: number;       // 0–1 normalized
   min?: number;
   max?: number;
+  step?: number;
   label?: string;
   size?: number;       // px diameter
   onChange: (value: number) => void;

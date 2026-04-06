@@ -6,8 +6,8 @@
  *   per-track playback → [TrackFX chain] → TrackGainNode → MasterGain → destination
  */
 
-import { EffectsChain, FXSequencer, createDefaultChainState, createDefaultSequenceState } from './effects';
-import type { FXBankId, FXChainState, FXSequenceState } from './effects';
+import { EffectsChain, FXSequencer } from './effects';
+import type { FXBankId, FXChainState } from './effects';
 
 export class AudioEngine {
   private static instance: AudioEngine | null = null;

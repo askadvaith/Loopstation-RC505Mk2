@@ -13,9 +13,6 @@ export class StereoEnhanceEffect extends BaseEffect {
   readonly type = 'STEREO_ENHANCE';
 
   private delay!: DelayNode;
-  private merger!: ChannelMergerNode;
-  private splitter!: ChannelSplitterNode;
-  private invertGain!: GainNode;
   private enhanceMix!: GainNode;
 
   constructor(ctx: AudioContext) {
@@ -39,10 +36,7 @@ export class StereoEnhanceEffect extends BaseEffect {
     this.enhanceMix.gain.value = 0.3;
 
     // Create stereo widening with mid-side manipulation
-    this.splitter = this.ctx.createChannelSplitter(2);
-    this.merger = this.ctx.createChannelMerger(2);
-    this.invertGain = this.ctx.createGain();
-    this.invertGain.gain.value = -0.3;
+    // (Unused nodes cleaned up)
 
     // Pass through direct
     this.inputNode.connect(this.outputNode);
