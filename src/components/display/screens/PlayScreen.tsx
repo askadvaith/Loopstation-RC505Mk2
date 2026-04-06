@@ -1,6 +1,6 @@
 /**
  * PlayScreen — Default display showing tempo, track overview, and memory info.
- * Matches the RC-505 MK2 main play screen layout.
+ * Matches the CR-606 MK-1 main play screen layout.
  */
 
 import { useTransportStore } from '../../../store/useTransportStore';

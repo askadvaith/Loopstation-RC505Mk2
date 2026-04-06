@@ -1,5 +1,5 @@
 /**
- * ParameterKnobs — The [1]–[4] knobs panel matching the RC-505 MK2 hardware.
+ * ParameterKnobs — The [1]–[4] knobs panel matching the CR-606 MK-1 hardware.
  *
  * These knobs contextually control different parameters based on the
  * current screen/mode. In Phase 2, they control:

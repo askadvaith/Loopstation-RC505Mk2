@@ -12,8 +12,10 @@ import { useEffect, useRef, useCallback } from 'react';
 import { AudioEngine } from '../audio/AudioEngine';
 import { LoopTrack } from '../audio/LoopTrack';
 import type { TrackState, TrackSettings } from '../audio/LoopTrack';
+import type { FXBankId } from '../audio/effects';
 import { useTrackStore } from '../store/useTrackStore';
 import { useTransportStore } from '../store/useTransportStore';
+import { useFXStore } from '../store/useFXStore';
 
 /* ─── Singleton track array ─── */
 let trackInstances: LoopTrack[] | null = null;
@@ -70,6 +72,15 @@ export interface AudioControls {
   /* Global controls */
   allStartStop: () => void;
   allClear: () => void;
+
+  /* Phase 4: FX controls */
+  setInputFXActiveBank: (bankId: FXBankId) => void;
+  toggleInputFXBank: (bankId: FXBankId) => void;
+  setTrackFXActiveBank: (trackIdx: number, bankId: FXBankId) => void;
+  toggleTrackFXBank: (trackIdx: number, bankId: FXBankId) => void;
+  setFXSlotType: (context: 'input' | 'track', trackIdx: number, bankId: FXBankId, slotIdx: number, fxType: string) => void;
+  setFXSlotSw: (context: 'input' | 'track', trackIdx: number, bankId: FXBankId, slotIdx: number, sw: boolean) => void;
+  setFXSlotParam: (context: 'input' | 'track', trackIdx: number, bankId: FXBankId, slotIdx: number, paramName: string, value: number) => void;
 }
 
 export function useAudioEngine(): AudioControls {
@@ -78,15 +89,28 @@ export function useAudioEngine(): AudioControls {
   const updateTrack = useTrackStore((s) => s.updateTrack);
   const positionRaf = useRef<number | null>(null);
 
-  /* Sync engine tempo with transport store */
+  /* Sync engine tempo with transport store, and propagate to FX sequencers */
   useEffect(() => {
     let prev = useTransportStore.getState();
     engine.tempo = prev.tempo;
     engine.timeSignature = prev.timeSignature;
     engine.playMode = prev.playMode;
 
+    // Propagate initial tempo to sequencers
+    engine.inputFXSequencer.setTempo(prev.tempo);
+    for (const seq of engine.trackFXSequencers.values()) {
+      seq.setTempo(prev.tempo);
+    }
+
     const unsub = useTransportStore.subscribe((state) => {
-      if (state.tempo !== prev.tempo) engine.tempo = state.tempo;
+      if (state.tempo !== prev.tempo) {
+        engine.tempo = state.tempo;
+        // Keep all FX sequencers in sync
+        engine.inputFXSequencer.setTempo(state.tempo);
+        for (const seq of engine.trackFXSequencers.values()) {
+          seq.setTempo(state.tempo);
+        }
+      }
       if (state.timeSignature !== prev.timeSignature) engine.timeSignature = state.timeSignature;
       if (state.playMode !== prev.playMode) engine.playMode = state.playMode;
       prev = state;
@@ -293,6 +317,103 @@ export function useAudioEngine(): AudioControls {
     engine.resetMasterLoop();
   }, [engine, tracks]);
 
+  /* ─── Phase 4: FX controls ─── */
+
+  /** Sync FX chain state from engine to Zustand store */
+  const syncInputFXToStore = useCallback(() => {
+    const state = engine.getInputFXState();
+    const fxStore = useFXStore.getState();
+    const banks = {} as Record<FXBankId, { sw: boolean; mode: 'SINGLE' | 'MULTI'; slots: [any, any, any, any] }>;
+    for (const [bankId, bank] of Object.entries(state.banks) as [FXBankId, any][]) {
+      banks[bankId] = {
+        sw: bank.sw,
+        mode: bank.mode,
+        slots: bank.slots.map((slot: any) => ({
+          ...slot,
+          fxLabel: slot.fxType,
+        })) as [any, any, any, any],
+      };
+    }
+    fxStore.setInputFXChain({ activeBank: state.activeBank, banks });
+  }, [engine]);
+
+  const syncTrackFXToStore = useCallback((trackIdx: number) => {
+    const state = engine.getTrackFXState(trackIdx);
+    if (!state) return;
+    const fxStore = useFXStore.getState();
+    const banks = {} as Record<FXBankId, { sw: boolean; mode: 'SINGLE' | 'MULTI'; slots: [any, any, any, any] }>;
+    for (const [bankId, bank] of Object.entries(state.banks) as [FXBankId, any][]) {
+      banks[bankId] = {
+        sw: bank.sw,
+        mode: bank.mode,
+        slots: bank.slots.map((slot: any) => ({
+          ...slot,
+          fxLabel: slot.fxType,
+        })) as [any, any, any, any],
+      };
+    }
+    fxStore.setTrackFXChain(trackIdx, { activeBank: state.activeBank, banks });
+  }, [engine]);
+
+  const setInputFXActiveBank = useCallback((bankId: FXBankId) => {
+    engine.setInputFXActiveBank(bankId);
+    syncInputFXToStore();
+  }, [engine, syncInputFXToStore]);
+
+  const toggleInputFXBank = useCallback((bankId: FXBankId) => {
+    engine.toggleInputFXBank(bankId);
+    syncInputFXToStore();
+  }, [engine, syncInputFXToStore]);
+
+  const setTrackFXActiveBank = useCallback((trackIdx: number, bankId: FXBankId) => {
+    engine.setTrackFXActiveBank(trackIdx, bankId);
+    syncTrackFXToStore(trackIdx);
+  }, [engine, syncTrackFXToStore]);
+
+  const toggleTrackFXBank = useCallback((trackIdx: number, bankId: FXBankId) => {
+    engine.toggleTrackFXBank(trackIdx, bankId);
+    syncTrackFXToStore(trackIdx);
+  }, [engine, syncTrackFXToStore]);
+
+  const setFXSlotType = useCallback((
+    context: 'input' | 'track', trackIdx: number,
+    bankId: FXBankId, slotIdx: number, fxType: string
+  ) => {
+    if (context === 'input') {
+      engine.setInputFXSlotType(bankId, slotIdx, fxType);
+      syncInputFXToStore();
+    } else {
+      engine.setTrackFXSlotType(trackIdx, bankId, slotIdx, fxType);
+      syncTrackFXToStore(trackIdx);
+    }
+  }, [engine, syncInputFXToStore, syncTrackFXToStore]);
+
+  const setFXSlotSw = useCallback((
+    context: 'input' | 'track', trackIdx: number,
+    bankId: FXBankId, slotIdx: number, sw: boolean
+  ) => {
+    if (context === 'input') {
+      engine.setInputFXSlotSw(bankId, slotIdx, sw);
+      syncInputFXToStore();
+    } else {
+      engine.setTrackFXSlotSw(trackIdx, bankId, slotIdx, sw);
+      syncTrackFXToStore(trackIdx);
+    }
+  }, [engine, syncInputFXToStore, syncTrackFXToStore]);
+
+  const setFXSlotParam = useCallback((
+    context: 'input' | 'track', trackIdx: number,
+    bankId: FXBankId, slotIdx: number, paramName: string, value: number
+  ) => {
+    if (context === 'input') {
+      engine.setInputFXSlotParam(bankId, slotIdx, paramName, value);
+      syncInputFXToStore();
+    } else {
+      engine.setTrackFXSlotParam(trackIdx, bankId, slotIdx, paramName, value);
+      syncTrackFXToStore(trackIdx);
+    }
+  }, [engine, syncInputFXToStore, syncTrackFXToStore]);
+
   return {
     engine,
     tracks,
@@ -311,5 +432,12 @@ export function useAudioEngine(): AudioControls {
     recBackTrack,
     allStartStop,
     allClear,
+    setInputFXActiveBank,
+    toggleInputFXBank,
+    setTrackFXActiveBank,
+    toggleTrackFXBank,
+    setFXSlotType,
+    setFXSlotSw,
+    setFXSlotParam,
   };
 }

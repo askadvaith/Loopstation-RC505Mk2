@@ -6,6 +6,9 @@
  *   per-track playback → [TrackFX chain] → TrackGainNode → MasterGain → destination
  */
 
+import { EffectsChain, FXSequencer, createDefaultChainState, createDefaultSequenceState } from './effects';
+import type { FXBankId, FXChainState, FXSequenceState } from './effects';
+
 export class AudioEngine {
   private static instance: AudioEngine | null = null;
 
@@ -18,6 +21,15 @@ export class AudioEngine {
   /* Analysis */
   public inputAnalyser: AnalyserNode;
   public masterAnalyser: AnalyserNode;
+
+  /* Input FX Chain (Phase 4) */
+  public inputFXChain: EffectsChain;
+  public inputFXSequencer: FXSequencer;
+  public inputFXOutput: GainNode;
+
+  /* Track FX Chains (Phase 4) — one per track, instantiated when tracks register */
+  public trackFXChains: Map<number, EffectsChain> = new Map();
+  public trackFXSequencers: Map<number, FXSequencer> = new Map();
 
   private constructor() {
     this.ctx = new AudioContext({ sampleRate: 44100 });
@@ -39,7 +51,16 @@ export class AudioEngine {
     this.inputAnalyser = this.ctx.createAnalyser();
     this.inputAnalyser.fftSize = 2048;
 
-    this.inputGain.connect(this.inputAnalyser);
+    // Input FX chain: inputGain → inputFXChain → inputFXOutput → inputAnalyser
+    this.inputFXChain = new EffectsChain(this.ctx, false);
+    this.inputFXSequencer = new FXSequencer(this.inputFXChain);
+
+    this.inputFXOutput = this.ctx.createGain();
+    this.inputFXOutput.gain.value = 1.0;
+
+    this.inputGain.connect(this.inputFXChain.inputNode);
+    this.inputFXChain.outputNode.connect(this.inputFXOutput);
+    this.inputFXOutput.connect(this.inputAnalyser);
   }
 
   static getInstance(): AudioEngine {
@@ -222,5 +243,110 @@ export class AudioEngine {
     const spm = this.samplesPerMeasure;
     if (spm <= 0) return lengthSamples;
     return Math.max(spm, Math.round(lengthSamples / spm) * spm);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+   * Phase 4 — Input FX Chain Control
+   * ═══════════════════════════════════════════════════════════════ */
+
+  /** Set the active bank for Input FX. */
+  setInputFXActiveBank(bankId: FXBankId): void {
+    this.inputFXChain.setActiveBank(bankId);
+  }
+
+  /** Toggle an Input FX bank on/off. */
+  toggleInputFXBank(bankId: FXBankId): void {
+    this.inputFXChain.toggleBankSw(bankId);
+  }
+
+  /** Set an Input FX bank on/off. */
+  setInputFXBankSw(bankId: FXBankId, sw: boolean): void {
+    this.inputFXChain.setBankSw(bankId, sw);
+  }
+
+  /** Set a slot's FX type on the Input FX chain. */
+  setInputFXSlotType(bankId: FXBankId, slotIdx: number, fxType: string): void {
+    this.inputFXChain.setSlotFXType(bankId, slotIdx, fxType);
+  }
+
+  /** Toggle a slot's sw on the Input FX chain. */
+  setInputFXSlotSw(bankId: FXBankId, slotIdx: number, sw: boolean): void {
+    this.inputFXChain.setSlotSw(bankId, slotIdx, sw);
+  }
+
+  /** Set a slot's parameter on the Input FX chain. */
+  setInputFXSlotParam(bankId: FXBankId, slotIdx: number, paramName: string, value: number): void {
+    this.inputFXChain.setSlotParam(bankId, slotIdx, paramName, value);
+  }
+
+  /** Get the Input FX chain state for persistence/UI sync. */
+  getInputFXState(): FXChainState {
+    return this.inputFXChain.exportState();
+  }
+
+  /** Load a complete Input FX chain state. */
+  loadInputFXState(state: FXChainState): void {
+    this.inputFXChain.loadState(state);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+   * Phase 4 — Track FX Chain Control
+   * ═══════════════════════════════════════════════════════════════ */
+
+  /** Create a Track FX chain for a given track (called from LoopTrack). */
+  createTrackFXChain(trackId: number): EffectsChain {
+    if (this.trackFXChains.has(trackId)) {
+      return this.trackFXChains.get(trackId)!;
+    }
+    const chain = new EffectsChain(this.ctx, true);
+    const seq = new FXSequencer(chain);
+    this.trackFXChains.set(trackId, chain);
+    this.trackFXSequencers.set(trackId, seq);
+    return chain;
+  }
+
+  /** Get the Track FX chain for a given track. */
+  getTrackFXChain(trackId: number): EffectsChain | undefined {
+    return this.trackFXChains.get(trackId);
+  }
+
+  /** Set the active bank for a Track FX chain. */
+  setTrackFXActiveBank(trackId: number, bankId: FXBankId): void {
+    this.trackFXChains.get(trackId)?.setActiveBank(bankId);
+  }
+
+  /** Toggle a Track FX bank on/off. */
+  toggleTrackFXBank(trackId: number, bankId: FXBankId): void {
+    this.trackFXChains.get(trackId)?.toggleBankSw(bankId);
+  }
+
+  /** Set a Track FX bank on/off. */
+  setTrackFXBankSw(trackId: number, bankId: FXBankId, sw: boolean): void {
+    this.trackFXChains.get(trackId)?.setBankSw(bankId, sw);
+  }
+
+  /** Set a slot's FX type on a Track FX chain. */
+  setTrackFXSlotType(trackId: number, bankId: FXBankId, slotIdx: number, fxType: string): void {
+    this.trackFXChains.get(trackId)?.setSlotFXType(bankId, slotIdx, fxType);
+  }
+
+  /** Toggle a slot's sw on a Track FX chain. */
+  setTrackFXSlotSw(trackId: number, bankId: FXBankId, slotIdx: number, sw: boolean): void {
+    this.trackFXChains.get(trackId)?.setSlotSw(bankId, slotIdx, sw);
+  }
+
+  /** Set a slot's parameter on a Track FX chain. */
+  setTrackFXSlotParam(trackId: number, bankId: FXBankId, slotIdx: number, paramName: string, value: number): void {
+    this.trackFXChains.get(trackId)?.setSlotParam(bankId, slotIdx, paramName, value);
+  }
+
+  /** Get a Track FX chain state. */
+  getTrackFXState(trackId: number): FXChainState | undefined {
+    return this.trackFXChains.get(trackId)?.exportState();
+  }
+
+  /** Load a complete Track FX chain state. */
+  loadTrackFXState(trackId: number, state: FXChainState): void {
+    this.trackFXChains.get(trackId)?.loadState(state);
   }
 }

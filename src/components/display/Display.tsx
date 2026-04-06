@@ -1,5 +1,5 @@
 /**
- * Display — Central LCD-style display matching the RC-505 MK2 hardware screen.
+ * Display — Central LCD-style display matching the CR-606 MK-1 hardware screen.
  *
  * Supports multiple screen views:
  * - PLAY: Main play screen with tempo and track overview

@@ -1,9 +1,9 @@
 /**
- * MainPanel — Top-level hardware panel layout for the RC-505 MK2 emulator.
+ * MainPanel — Top-level hardware panel layout for the CR-606 MK-1 emulator.
  *
  * Layout (matches the physical unit's top panel):
  * ┌──────────────────────────────────────────────────────────────────┐
- * │  [BOSS Logo / Title]                              [Social Links]│
+ * │  [Title]                                          [Social Links]│
  * ├──────────────────────────────────────────────────────────────────┤
  * │  [INPUT FX placeholder]  │  [Display]  │  [TRACK FX placeholder]│
  * │                          │  [Knobs]    │                        │
@@ -17,10 +17,15 @@
 import { useAudioEngine } from '../../hooks/useAudioEngine';
 import { useKeyboard } from '../../hooks/useKeyboard';
 import { useTransportStore } from '../../store/useTransportStore';
+import { useFXStore } from '../../store/useFXStore';
+import { useTrackStore } from '../../store/useTrackStore';
 import { TrackStrip } from '../track/TrackStrip';
 import { Display } from '../display/Display';
 import { TransportControls } from '../controls/TransportControls';
 import { ParameterKnobs } from '../controls/ParameterKnobs';
+import { FXSection } from '../fx/FXSection';
+import { FXEditScreen } from '../fx/FXEditScreen';
+import type { FXBankId } from '../../audio/effects';
 
 export function MainPanel() {
   const controls = useAudioEngine();
@@ -41,11 +46,21 @@ export function MainPanel() {
     recBackTrack,
     allStartStop,
     allClear,
+    setInputFXActiveBank,
+    toggleInputFXBank,
+    setTrackFXActiveBank,
+    toggleTrackFXBank,
+    setFXSlotType,
+    setFXSlotSw,
+    setFXSlotParam,
   } = controls;
 
   useKeyboard(controls);
 
   const audioReady = useTransportStore((s) => s.audioReady);
+  const editTarget = useFXStore((s) => s.editTarget);
+  const setEditTarget = useFXStore((s) => s.setEditTarget);
+  const currentTrack = useTrackStore((s) => s.currentTrack);
 
   /* Audio must be initialized from a user gesture */
   if (!audioReady) {
@@ -54,10 +69,10 @@ export function MainPanel() {
         {/* Logo area */}
         <div className="text-center">
           <div className="text-[10px] font-bold tracking-[0.4em] text-zinc-600 mb-1">
-            BOSS
+            
           </div>
           <h1 className="text-3xl font-bold tracking-[0.15em] text-zinc-200">
-            RC-505 MK2
+            CR-606 MK-1
           </h1>
           <p className="text-[11px] tracking-[0.3em] text-zinc-500 mt-1">
             LOOP STATION
@@ -95,7 +110,7 @@ export function MainPanel() {
       <div className="flex items-center justify-between px-5 py-2 border-b border-[var(--panel-border)]/50">
         <div>
           <h1 className="text-sm font-bold tracking-[0.15em] text-zinc-300 leading-tight">
-            RC-505 MK2
+            CR-606 MK-1
           </h1>
           <p className="text-[8px] tracking-[0.25em] text-zinc-600 leading-tight">LOOP STATION</p>
         </div>
@@ -127,24 +142,31 @@ export function MainPanel() {
 
       {/* ═══ CENTER SECTION — FX placeholders + Display + Knobs ═══ */}
       <div className="flex gap-4 px-5 py-3">
-        {/* Input FX placeholder (Phase 4) */}
-        <div className="flex-1 flex flex-col items-center justify-center rounded-lg border border-dashed border-[var(--panel-border)]/40 p-2 min-h-[80px]">
-          <span className="text-[9px] font-bold tracking-[0.2em] text-zinc-700">INPUT FX</span>
-          <div className="flex gap-1 mt-1">
-            {['A', 'B', 'C', 'D'].map((bank) => (
-              <div
-                key={bank}
-                className="w-6 h-5 rounded text-[8px] font-bold flex items-center justify-center bg-zinc-800/60 text-zinc-600 border border-zinc-700/50"
-              >
-                {bank}
-              </div>
-            ))}
-          </div>
+        {/* Input FX (Phase 4) */}
+        <div className="flex-1 flex flex-col items-center justify-center rounded-lg border border-[var(--panel-border)]/40 p-2 min-h-[80px]">
+          <FXSection
+            context="input"
+            onBankSelect={(bankId: FXBankId) => setInputFXActiveBank(bankId)}
+            onBankToggle={(bankId: FXBankId) => toggleInputFXBank(bankId)}
+            onSlotClick={(bankId: FXBankId, slotIdx: number) =>
+              setEditTarget({ context: 'input', slotIdx, bankId })
+            }
+          />
         </div>
 
         {/* Display (central) */}
         <div className="flex-[2] min-w-[280px]">
-          <Display onUpdateSettings={updateTrackSettings} />
+          {editTarget ? (
+            <FXEditScreen
+              editTarget={editTarget}
+              onSetFXType={setFXSlotType}
+              onSetSlotSw={setFXSlotSw}
+              onSetSlotParam={setFXSlotParam}
+              onClose={() => setEditTarget(null)}
+            />
+          ) : (
+            <Display onUpdateSettings={updateTrackSettings} />
+          )}
         </div>
 
         {/* Parameter Knobs + Output Level */}
@@ -156,19 +178,17 @@ export function MainPanel() {
           />
         </div>
 
-        {/* Track FX placeholder (Phase 4) */}
-        <div className="flex-1 flex flex-col items-center justify-center rounded-lg border border-dashed border-[var(--panel-border)]/40 p-2 min-h-[80px]">
-          <span className="text-[9px] font-bold tracking-[0.2em] text-zinc-700">TRACK FX</span>
-          <div className="flex gap-1 mt-1">
-            {['A', 'B', 'C', 'D'].map((bank) => (
-              <div
-                key={bank}
-                className="w-6 h-5 rounded text-[8px] font-bold flex items-center justify-center bg-zinc-800/60 text-zinc-600 border border-zinc-700/50"
-              >
-                {bank}
-              </div>
-            ))}
-          </div>
+        {/* Track FX (Phase 4) */}
+        <div className="flex-1 flex flex-col items-center justify-center rounded-lg border border-[var(--panel-border)]/40 p-2 min-h-[80px]">
+          <FXSection
+            context="track"
+            trackIdx={currentTrack}
+            onBankSelect={(bankId: FXBankId) => setTrackFXActiveBank(currentTrack, bankId)}
+            onBankToggle={(bankId: FXBankId) => toggleTrackFXBank(currentTrack, bankId)}
+            onSlotClick={(bankId: FXBankId, slotIdx: number) =>
+              setEditTarget({ context: 'track', trackIdx: currentTrack, slotIdx, bankId })
+            }
+          />
         </div>
       </div>
 
@@ -217,6 +237,8 @@ export function MainPanel() {
           { key: 'O', action: '1-Shot' },
           { key: 'M', action: 'Mark' },
           { key: 'B', action: 'Rec Back' },
+          { key: 'F1–F4', action: 'Input FX A–D' },
+          { key: 'F5–F8', action: 'Track FX A–D' },
         ].map((shortcut) => (
           <span key={shortcut.key} className="text-[8px] text-zinc-700 flex items-center gap-1">
             <kbd className="px-1 py-0.5 bg-zinc-800/60 rounded text-zinc-500 font-mono text-[7px] border border-zinc-700/50">
