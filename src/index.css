@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  /* Hardware color palette — RC-505 MK2 */
+  /* Hardware color palette — CR-606 MK-1 */
   --panel-bg: #131316;
   --panel-surface: #1e1e23;
   --panel-border: #2a2a30;
@@ -9,6 +9,7 @@
   --led-green: #22c55e;
   --led-yellow: #eab308;
   --led-blue: #3b82f6;
+  --led-amber: #f59e0b;
   --led-pink: #ec4899;
   --lcd-bg: #070e1d;
   --lcd-text: #7dd3fc;

@@ -1,5 +1,5 @@
 /**
- * TrackSlider — Vertical volume fader matching RC-505 MK2 hardware style.
+ * TrackSlider — Vertical volume fader matching CR-606 MK-1 hardware style.
  *
  * A custom-styled vertical range input with a hardware-like track groove
  * and slider thumb.

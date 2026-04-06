@@ -1,5 +1,5 @@
 /**
- * Knob — Rotary knob component mimicking the RC-505 MK2 hardware knobs.
+ * Knob — Rotary knob component mimicking the CR-606 MK-1 hardware knobs.
  *
  * Supports drag-to-rotate interaction (vertical mouse movement).
  * Visual: dark circle with an indicator line showing current position.

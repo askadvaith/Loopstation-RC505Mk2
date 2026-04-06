@@ -22,8 +22,10 @@ import { useEffect } from 'react';
 import type { AudioControls } from './useAudioEngine';
 import { useTrackStore } from '../store/useTrackStore';
 import type { DubMode } from '../audio/LoopTrack';
+import type { FXBankId } from '../audio/effects';
 
 const DUB_MODE_CYCLE: DubMode[] = ['overdub', 'replace1', 'replace2'];
+const FX_BANK_KEYS: FXBankId[] = ['A', 'B', 'C', 'D'];
 
 export function useKeyboard(controls: AudioControls): void {
   useEffect(() => {
@@ -141,6 +143,24 @@ export function useKeyboard(controls: AudioControls): void {
       if (e.shiftKey && key === 'backspace') {
         e.preventDefault();
         controls.allClear();
+        return;
+      }
+
+      // Input FX bank toggle: F1–F4 → Bank A–D
+      if (key === 'f1' || key === 'f2' || key === 'f3' || key === 'f4') {
+        e.preventDefault();
+        const bankIdx = parseInt(key.slice(1)) - 1;
+        const bankId = FX_BANK_KEYS[bankIdx];
+        if (bankId) controls.toggleInputFXBank(bankId);
+        return;
+      }
+
+      // Track FX bank toggle: F5–F8 → Bank A–D
+      if (key === 'f5' || key === 'f6' || key === 'f7' || key === 'f8') {
+        e.preventDefault();
+        const bankIdx = parseInt(key.slice(1)) - 5;
+        const bankId = FX_BANK_KEYS[bankIdx];
+        if (bankId) controls.toggleTrackFXBank(currentTrack, bankId);
         return;
       }
     };

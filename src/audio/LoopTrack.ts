@@ -22,6 +22,7 @@
  */
 
 import { AudioEngine } from './AudioEngine';
+import type { EffectsChain } from './effects/EffectsChain';
 
 /* ─── Types ─── */
 
@@ -130,6 +131,7 @@ export class LoopTrack {
   private playbackSource: AudioBufferSourceNode | null = null;
   private gainNode: GainNode;
   private panNode: StereoPannerNode;
+  private trackFXChain: EffectsChain;
   private _volume = 1.0;   // 0–2, 1 = unity
   private _pan = 0;         // -1 to +1
 
@@ -159,14 +161,19 @@ export class LoopTrack {
     this._settings = { ...DEFAULT_SETTINGS };
     this.engine = AudioEngine.getInstance();
 
-    // Per-track gain → pan → master output
+    // Per-track gain → FX chain → pan → master output
     this.gainNode = this.engine.ctx.createGain();
     this.gainNode.gain.value = this._volume;
 
     this.panNode = this.engine.ctx.createStereoPanner();
     this.panNode.pan.value = this._pan;
 
-    this.gainNode.connect(this.panNode);
+    // Create Track FX chain (Phase 4)
+    this.trackFXChain = this.engine.createTrackFXChain(this.id);
+
+    // Signal flow: gainNode → trackFXChain → panNode → masterGain
+    this.gainNode.connect(this.trackFXChain.inputNode);
+    this.trackFXChain.outputNode.connect(this.panNode);
     this.panNode.connect(this.engine.masterGain);
 
     // Register with engine for cross-track coordination (bounce)
@@ -664,8 +671,8 @@ export class LoopTrack {
       outputR.set(inputR);
     };
 
-    // Connect: inputGain → mixer → recorder → silentGain → destination
-    this.engine.inputGain.connect(this.recorderMixer);
+    // Connect: inputFXOutput → mixer → recorder → silentGain → destination
+    this.engine.inputFXOutput.connect(this.recorderMixer);
     this.recorderMixer.connect(this.recorder);
 
     // Silent output to keep the ScriptProcessor alive
@@ -678,7 +685,7 @@ export class LoopTrack {
   private teardownRecorder(): void {
     if (this.recorder) {
       this.recorder.onaudioprocess = null;
-      try { this.engine.inputGain.disconnect(this.recorderMixer!); } catch { /* noop */ }
+      try { this.engine.inputFXOutput.disconnect(this.recorderMixer!); } catch { /* noop */ }
       if (this.recorderMixer) {
         this.recorderMixer.disconnect();
         this.recorderMixer = null;
