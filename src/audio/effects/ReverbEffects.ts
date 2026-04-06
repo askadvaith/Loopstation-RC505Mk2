@@ -14,7 +14,6 @@ export class ReverbEffect extends BaseEffect {
 
   private convolver!: ConvolverNode;
   private directGain!: GainNode;
-  private wetGain!: GainNode;
   private preDelay!: DelayNode;
   private lowCut!: BiquadFilterNode;
   private highCut!: BiquadFilterNode;
@@ -150,7 +149,6 @@ export class ReverseReverbEffect extends BaseEffect {
 
   private convolver!: ConvolverNode;
   private directGain!: GainNode;
-  private wetGain!: GainNode;
   private reverbTime = 2.0;
 
   constructor(ctx: AudioContext) {
@@ -237,7 +235,6 @@ export class GateReverbEffect extends BaseEffect {
 
   private convolver!: ConvolverNode;
   private directGain!: GainNode;
-  private wetGain!: GainNode;
   private gateTime = 0.3;
 
   constructor(ctx: AudioContext) {

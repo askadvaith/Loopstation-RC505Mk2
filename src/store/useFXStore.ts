@@ -9,8 +9,6 @@ import { create } from 'zustand';
 import type {
   FXBankId,
   FXBankMode,
-  FXSwMode,
-  FXInsertTarget,
   FXSlotState,
   FXBankState,
   FXChainState,

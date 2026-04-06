@@ -16,7 +16,6 @@ export class VocoderEffect extends BaseEffect {
   // Band analysis and synthesis
   private analysisBands: BiquadFilterNode[] = [];
   private synthBands: BiquadFilterNode[] = [];
-  private synthOscillators: OscillatorNode[] = [];
   private bandGains: GainNode[] = [];
   private directGain!: GainNode;
   private effectGain!: GainNode;
