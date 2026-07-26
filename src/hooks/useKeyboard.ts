@@ -16,16 +16,75 @@
  *   Shift+M    → Mark back on current track
  *   B          → REC back on current track
  *   Shift+Backspace → All Clear
+ *
+ *   When an FX slot is open for editing (real-time parameter editor, mirrors the
+ *   hardware's CURSOR + VALUE dial):
+ *   ← / →      → Move the cursor between the effect's parameters
+ *   ↑ / ↓      → Change the focused parameter's value (Shift = coarse step)
  */
 
 import { useEffect } from 'react';
 import type { AudioControls } from './useAudioEngine';
 import { useTrackStore } from '../store/useTrackStore';
+import { useFXStore } from '../store/useFXStore';
 import type { DubMode } from '../audio/LoopTrack';
 import type { FXBankId } from '../audio/effects';
+import { getEffectTypeDef } from '../audio/effects';
 
 const DUB_MODE_CYCLE: DubMode[] = ['overdub', 'replace1', 'replace2'];
 const FX_BANK_KEYS: FXBankId[] = ['A', 'B', 'C', 'D'];
+
+/**
+ * Real-time parameter editor: apply an arrow key to the currently-open FX slot.
+ * ← / → move the CURSOR (focused parameter); ↑ / ↓ change its VALUE. This is the
+ * software stand-in for the hardware's cursor buttons + VALUE dial, and works
+ * for any effect because it is driven entirely by the effect's param metadata.
+ * Returns true if an FX slot was open and the key was consumed.
+ */
+function handleParamEditor(
+  key: string,
+  shift: boolean,
+  controls: AudioControls,
+): boolean {
+  const fx = useFXStore.getState();
+  const target = fx.editTarget;
+  if (!target) return false; // no FX open → let the arrows do their normal thing
+
+  const isTrack = target.context === 'track';
+  const trackIdx = isTrack ? (target as { trackIdx: number }).trackIdx : 0;
+  const chain = isTrack ? fx.trackFX[trackIdx] : fx.inputFX;
+  const slot = chain.banks[target.bankId].slots[target.slotIdx];
+  const params = getEffectTypeDef(slot.fxType)?.params ?? [];
+  if (params.length === 0) return true; // FX open but has no params — still consume
+
+  // ← / → : move the cursor across the parameters.
+  if (key === 'arrowleft' || key === 'arrowright') {
+    const dir = key === 'arrowright' ? 1 : -1;
+    const next = Math.min(params.length - 1, Math.max(0, fx.focusedParamIdx + dir));
+    fx.setFocusedParamIdx(next);
+    return true;
+  }
+
+  // ↑ / ↓ : change the focused parameter's value.
+  const pIdx = Math.min(params.length - 1, Math.max(0, fx.focusedParamIdx));
+  const def = params[pIdx];
+  const current = slot.params[def.name] ?? def.default;
+  const dir = key === 'arrowup' ? 1 : -1;
+
+  // Choice params (e.g. ROBOT NOTE) step one entry at a time; numeric params
+  // step by their declared `step`, with Shift giving a coarse ~10%-of-range jump.
+  let step = def.step ?? 1;
+  if (!def.choices && shift) {
+    step = Math.max(step, Math.round((def.max - def.min) / 10));
+  }
+  const nextVal = Math.min(def.max, Math.max(def.min, current + dir * step));
+  if (nextVal !== current) {
+    controls.setFXSlotParam(
+      target.context, trackIdx, target.bankId, target.slotIdx, def.name, nextVal
+    );
+  }
+  return true;
+}
 
 export function useKeyboard(controls: AudioControls): void {
   useEffect(() => {
@@ -39,6 +98,34 @@ export function useKeyboard(controls: AudioControls): void {
       }
 
       const key = e.key.toLowerCase();
+
+      // ── Real-time parameter editor (CURSOR + VALUE) ──
+      // When an FX slot is open, the arrow keys behave like the hardware: ← →
+      // move the cursor across the effect's parameters and ↑ ↓ change the
+      // focused one's value. This is a *general* mechanism — it works for every
+      // effect, which is how e.g. the ROBOT NOTE is played as a live melody.
+      // Handled BEFORE the e.repeat guard on purpose, so holding ↑/↓ sweeps the
+      // value continuously the way turning the VALUE dial would.
+      if (
+        (key === 'arrowleft' || key === 'arrowright' ||
+         key === 'arrowup' || key === 'arrowdown') &&
+        !e.ctrlKey && !e.metaKey && !e.altKey
+      ) {
+        if (handleParamEditor(key, e.shiftKey, controls)) {
+          e.preventDefault();
+        }
+        return;
+      }
+
+      // Ignore OS key auto-repeat. These keys emulate the RC-505's momentary
+      // footswitches/pads: every binding is a discrete toggle, so a held key
+      // must fire exactly once. Without this, holding [1] for longer than the
+      // system repeat delay (~250-500ms) fires a second keydown that toggles
+      // straight back out of the state you just entered — a held record key
+      // starts and then immediately stops recording, leaving a phrase a few
+      // hundred milliseconds long and a nonsense derived tempo.
+      if (e.repeat) return;
+
       const currentTrack = useTrackStore.getState().currentTrack;
 
       // Track toggle: 1-5

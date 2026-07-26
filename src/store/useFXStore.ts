@@ -56,6 +56,14 @@ interface FXStoreState {
   /** Currently selected edit target (null = no edit screen open) */
   editTarget: FXEditTarget;
 
+  /**
+   * Index of the "focused" parameter within the current edit target's effect.
+   * This is the RC-505 CURSOR position: the real-time parameter editor moves it
+   * with ◄ ► and changes that parameter's value with ▲ ▼. Reset to 0 whenever
+   * the edit target changes so the cursor always lands on a valid parameter.
+   */
+  focusedParamIdx: number;
+
   /** Whether the FX type picker modal is open */
   typePickerOpen: boolean;
 
@@ -81,6 +89,7 @@ interface FXStoreState {
 
   // Edit screen
   setEditTarget: (target: FXEditTarget) => void;
+  setFocusedParamIdx: (idx: number) => void;
   setTypePickerOpen: (open: boolean) => void;
 }
 
@@ -113,6 +122,7 @@ export const useFXStore = create<FXStoreState>((set) => ({
   inputFXSeq: createDefaultSequenceState(),
   trackFXSeq: Array.from({ length: 5 }, createDefaultSequenceState),
   editTarget: null,
+  focusedParamIdx: 0,
   typePickerOpen: false,
 
   // ── Input FX Actions ──
@@ -228,7 +238,12 @@ export const useFXStore = create<FXStoreState>((set) => ({
   // ── Edit Actions ──
 
   setEditTarget: (target) =>
-    set({ editTarget: target }),
+    // Reset the cursor to the first parameter whenever the target changes, so
+    // ◄ ► / ▲ ▼ never point at a parameter that belongs to a different effect.
+    set({ editTarget: target, focusedParamIdx: 0 }),
+
+  setFocusedParamIdx: (idx) =>
+    set({ focusedParamIdx: Math.max(0, idx) }),
 
   setTypePickerOpen: (open) =>
     set({ typePickerOpen: open }),

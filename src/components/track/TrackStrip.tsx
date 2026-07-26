@@ -21,7 +21,10 @@ interface TrackStripProps {
 
 const STATE_LED: Record<string, { bg: string; glow: string }> = {
   empty: { bg: '#3f3f46', glow: '' },
-  'rec-standby': { bg: '#ff2d2d', glow: 'led-glow-red' },
+  // Amber, not red: standby is ARMED but capturing nothing. Showing the same
+  // red as `recording` makes an AUTO REC wait look like an active take, so a
+  // recording that only begins on the first sound reads as one that stopped.
+  'rec-standby': { bg: '#f59e0b', glow: 'led-glow-yellow' },
   recording: { bg: '#ff2d2d', glow: 'led-glow-red' },
   playing: { bg: '#22c55e', glow: 'led-glow-green' },
   overdubbing: { bg: '#eab308', glow: 'led-glow-yellow' },
@@ -32,7 +35,7 @@ const STATE_LED: Record<string, { bg: string; glow: string }> = {
 
 const STATE_LABELS: Record<string, string> = {
   empty: 'EMPTY',
-  'rec-standby': 'STBY',
+  'rec-standby': 'WAIT',
   recording: 'REC',
   playing: 'PLAY',
   overdubbing: 'O-DUB',
@@ -98,7 +101,9 @@ export function TrackStrip({
         className="text-[10px] font-mono font-bold tracking-wider h-4"
         style={{
           color:
-            track.state === 'recording' || track.state === 'rec-standby'
+            track.state === 'rec-standby'
+              ? 'var(--led-yellow)'
+              : track.state === 'recording'
               ? 'var(--led-red)'
               : track.state === 'playing'
                 ? 'var(--led-green)'

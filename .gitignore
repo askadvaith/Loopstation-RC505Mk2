@@ -2,6 +2,11 @@
 .venv
 venv
 
+# Dev stuff
+samples/
+scripts/
+AGENTS.md
+transcript.txt
 
 # Logs
 logs

@@ -22,6 +22,7 @@
  */
 
 import { AudioEngine } from './AudioEngine';
+import { GranularPitchShifter } from './effects/PitchShifter';
 import type { EffectsChain } from './effects/EffectsChain';
 
 /* ─── Types ─── */
@@ -77,9 +78,19 @@ const DEFAULT_SETTINGS: TrackSettings = {
   stopMode: 'immediate',
   fadeTimeIn: 2,
   fadeTimeOut: 2,
-  loopSync: true,
-  tempoSyncSw: false,
-  tempoSyncMode: 'pitch',
+  // OFF, matching the hardware default. Tracks are then independent in length
+  // and start time — record a 1-bar hihat on one track and an 8-bar pad on
+  // another with neither constraining the other. Turning it ON aligns phrase
+  // starts and rounds new recordings to a whole multiple of the first
+  // loop-synced phrase, which is what you want for a tight rhythmic stack.
+  loopSync: false,
+  // ON by default: like the hardware, recorded phrases follow the song tempo,
+  // so changing BPM (knob or TAP) re-rates existing loops.
+  tempoSyncSw: true,
+  // XFADE (pitch-preserving) by default — a BPM change should move the tempo,
+  // not transpose the phrase. Switch to PITCH in Track Edit for tape-style
+  // varispeed, where speeding up also raises pitch.
+  tempoSyncMode: 'xfade',
   speed: 'normal',
   measure: 'auto',
   quantize: 'off',
@@ -108,6 +119,13 @@ export class LoopTrack {
   private channelData: Float32Array[] = [];
   private recordLength = 0;
   private _originalTempo = 120;
+  /**
+   * AudioContext time at which capture began. Used to verify capture integrity:
+   * ScriptProcessorNode runs onaudioprocess on the main thread, so a stall drops
+   * buffers *silently* and we store less audio than was actually played. That
+   * makes the phrase short, which makes MEASURE:AUTO derive a far-too-high tempo.
+   */
+  private recordStartCtxTime = 0;
 
   /* Undo/Redo — single-level */
   private undoChannelData: Float32Array[] = [];
@@ -155,6 +173,14 @@ export class LoopTrack {
   private fadeTimer: ReturnType<typeof setTimeout> | null = null;
   private loopEndTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /* Tempo subscription teardown */
+  private unsubscribeTempo: (() => void) | null = null;
+  /** Playback rate currently applied to playbackSource (drives all loop-phase math). */
+  private appliedRate = 1;
+  /** TEMPO SYNC: XFADE mode cancels the varispeed pitch shift. Built on demand. */
+  private tempoShifter: GranularPitchShifter | null = null;
+  private shifterEngaged = false;
+
   constructor(options: LoopTrackOptions) {
     this.id = options.id;
     this.onStateChange = options.onStateChange;
@@ -178,6 +204,97 @@ export class LoopTrack {
 
     // Register with engine for cross-track coordination (bounce)
     this.engine.registerTrack(this.id, this.panNode, () => this._state);
+
+    // Follow global tempo changes: re-rate live playback so an already-recorded
+    // loop speeds up / slows down with the BPM knob and TAP TEMPO.
+    this.unsubscribeTempo = this.engine.onTempoChange(() => this.applyTempoChange());
+  }
+
+  /**
+   * Re-apply the playback rate to a currently-playing source after a tempo
+   * change. Safe to call every frame: it no-ops unless the target rate has
+   * actually moved, so the position-tracking loop can use it as a self-heal
+   * for any tempo change that didn't arrive via onTempoChange.
+   */
+  private applyTempoChange(): void {
+    if (!this.playbackSource) return;
+    const rate = this.getPlaybackRate();
+    if (rate <= 0) return;
+
+    if (Math.abs(rate - this.appliedRate) >= 1e-4) {
+      // Keep the loop phase continuous: anchor loopStartTime to the position we
+      // are at right now (computed at the OLD rate), then let the new rate take
+      // over from here.
+      const position = this.playbackPositionNormalized();
+      this.playbackSource.playbackRate.setTargetAtTime(
+        rate,
+        this.engine.ctx.currentTime,
+        0.02
+      );
+      this.appliedRate = rate;
+      const newDuration = this.loopDurationAtRate(rate);
+      this.loopStartTime = this.engine.ctx.currentTime - position * newDuration;
+    }
+
+    // Always re-check routing: switching PITCH↔XFADE changes the graph without
+    // changing the rate, so this must not sit behind the rate check above.
+    this.routePlayback(rate);
+  }
+
+  /**
+   * Route playbackSource → [pitch compensation] → gainNode according to
+   * TEMPO SYNC MODE.
+   *
+   * PITCH: straight varispeed — speeding the loop up raises its pitch, like
+   * tape. XFADE: the hardware's pitch-preserving mode, so a tempo change does
+   * not transpose the phrase. We get that by keeping the varispeed rate and
+   * transposing back by the exact amount it introduced.
+   *
+   * The shifter is bypassed entirely at rate 1 so an untouched tempo stays
+   * bit-clean — granular shifting is never free of warble.
+   */
+  private routePlayback(rate: number): void {
+    if (!this.playbackSource) return;
+
+    const wantShift =
+      this._settings.tempoSyncSw &&
+      this._settings.tempoSyncMode === 'xfade' &&
+      Math.abs(rate - 1) > 1e-3;
+
+    if (wantShift) {
+      if (!this.tempoShifter) {
+        this.tempoShifter = new GranularPitchShifter(this.engine.ctx);
+        this.tempoShifter.output.connect(this.gainNode);
+      }
+      // Rate r raises pitch by 12·log2(r); cancel exactly that.
+      this.tempoShifter.setSemitones(-12 * Math.log2(rate));
+      if (!this.shifterEngaged) {
+        try { this.playbackSource.disconnect(); } catch { /* not connected */ }
+        this.playbackSource.connect(this.tempoShifter.input);
+        this.shifterEngaged = true;
+      }
+    } else if (this.shifterEngaged) {
+      try { this.playbackSource.disconnect(); } catch { /* not connected */ }
+      this.playbackSource.connect(this.gainNode);
+      this.shifterEngaged = false;
+    }
+  }
+
+  /** Audible loop duration (seconds) at a given playback rate. */
+  private loopDurationAtRate(rate: number): number {
+    const base = this.recordLength / this.engine.sampleRate;
+    return rate > 0 ? base / rate : base;
+  }
+
+  /** Current position within the loop, normalized 0–1. */
+  private playbackPositionNormalized(): number {
+    // Use the rate actually running on the source, not the freshly-computed
+    // target — during a tempo change those differ, and phase must be measured
+    // under the rate that produced the elapsed time.
+    const duration = this.loopDurationAtRate(this.appliedRate);
+    if (duration <= 0) return 0;
+    const elapsed = this.engine.ctx.currentTime - this.loopStartTime;
+    return (((elapsed % duration) + duration) % duration) / duration;
   }
 
   /* ═══════════════════════════════════════════════════════════
@@ -205,8 +322,13 @@ export class LoopTrack {
     this._settings = { ...this._settings, ...partial };
 
     // Apply live speed/tempo-sync rate change
-    if (this.playbackSource && (partial.speed !== undefined || partial.tempoSyncSw !== undefined)) {
-      this.playbackSource.playbackRate.value = this.getPlaybackRate();
+    if (
+      this.playbackSource &&
+      (partial.speed !== undefined ||
+        partial.tempoSyncSw !== undefined ||
+        partial.tempoSyncMode !== undefined)
+    ) {
+      this.applyTempoChange();
     }
 
     // Restart playback if reverse changed while playing
@@ -295,6 +417,7 @@ export class LoopTrack {
         this.teardownRecorder();
         this.disconnectBounce();
         if (this.recordLength > 0) {
+          this.checkCaptureIntegrity();
           this.applyMeasureConstraints();
           this.channelData = [
             this.channelData[0].slice(0, this.recordLength),
@@ -402,6 +525,10 @@ export class LoopTrack {
 
   /** Enter auto-rec standby: monitor input level and start when threshold exceeded. */
   private enterAutoRecStandby(): void {
+    console.info(
+      `[LoopTrack ${this.id}] AUTO REC is ON — armed and waiting for input. ` +
+        `Nothing is being recorded yet (state: rec-standby).`
+    );
     this.setState('rec-standby');
     const analyser = this.engine.inputAnalyser;
     const dataArray = new Float32Array(analyser.fftSize);
@@ -419,6 +546,11 @@ export class LoopTrack {
 
       if (rms > threshold) {
         this.autoRecRAF = null;
+        console.info(
+          `[LoopTrack ${this.id}] AUTO REC triggered: level ${rms.toFixed(4)} > ` +
+            `threshold ${threshold.toFixed(4)}. NOTE: the detector listens AFTER the ` +
+            `Input FX chain, so a Robot carrier or Slicer output can trip it on its own.`
+        );
         this.startRecordingImmediate();
         return;
       }
@@ -450,6 +582,7 @@ export class LoopTrack {
     this.recordStartSample = 0;
     this.isOverdubbing = false;
     this._originalTempo = this.engine.tempo;
+    this.recordStartCtxTime = this.engine.ctx.currentTime;
 
     this.setupRecorder(4096);
 
@@ -472,7 +605,13 @@ export class LoopTrack {
       return;
     }
 
+    console.info(
+      `[LoopTrack ${this.id}] Recording ended after ` +
+        `${(this.recordLength / this.engine.sampleRate).toFixed(3)}s raw.`
+    );
+
     // Apply measure constraints (quantize length, master loop sync, etc.)
+    this.checkCaptureIntegrity();
     this.applyMeasureConstraints();
 
     // Trim buffer to actual recorded length
@@ -488,7 +627,12 @@ export class LoopTrack {
 
     // Register as master loop if first synced track
     if (this._settings.loopSync && this.engine.masterLoopLengthSamples === 0) {
-      this.engine.setMasterLoopLength(this.recordLength);
+      console.info(
+        `[LoopTrack ${this.id}] Became the MASTER LOOP at ` +
+          `${(this.recordLength / this.engine.sampleRate).toFixed(3)}s. Every later ` +
+          `LOOP SYNC track rounds to a whole multiple of this.`
+      );
+      this.engine.setMasterLoopLength(this.recordLength, this.id);
       this.engine.setMasterLoopStartTime(this.engine.ctx.currentTime);
     }
 
@@ -504,6 +648,37 @@ export class LoopTrack {
     }
   }
 
+  /**
+   * Compare captured audio against wall-clock recording time.
+   *
+   * These should match to within one buffer (~93 ms at 4096 frames). If we
+   * captured materially less, the ScriptProcessorNode dropped callbacks because
+   * the main thread was busy — the phrase is then shorter than what was played,
+   * every derived tempo is wrong by that ratio, and the audio itself has gaps.
+   * No amount of tempo maths downstream can fix that; the capture has to move
+   * off the main thread (AudioWorklet).
+   */
+  private checkCaptureIntegrity(): void {
+    if (this.recordStartCtxTime <= 0 || this.recordLength === 0) return;
+
+    const elapsed = this.engine.ctx.currentTime - this.recordStartCtxTime;
+    const captured = this.recordLength / this.engine.sampleRate;
+    if (elapsed <= 0) return;
+
+    const ratio = captured / elapsed;
+    // One buffer of slack at each end, plus 2%.
+    const tolerance = (2 * 4096) / this.engine.sampleRate + elapsed * 0.02;
+
+    if (elapsed - captured > tolerance) {
+      console.warn(
+        `[LoopTrack ${this.id}] Capture dropout: held REC for ${elapsed.toFixed(3)}s ` +
+          `but only stored ${captured.toFixed(3)}s (${(ratio * 100).toFixed(1)}% of the ` +
+          `performance). The ScriptProcessorNode is missing buffers, so this phrase is ` +
+          `too short and any tempo derived from it will be too high by ~${(1 / ratio).toFixed(2)}×.`
+      );
+    }
+  }
+
   /** Snap recording length to measure constraints. */
   private applyMeasureConstraints(): void {
     const spm = this.engine.samplesPerMeasure;
@@ -513,13 +688,44 @@ export class LoopTrack {
 
     if (measure === 'auto') {
       if (this._settings.loopSync && this.engine.masterLoopLengthSamples > 0) {
-        // Match master loop length
-        this.recordLength = Math.min(
-          this.engine.masterLoopLengthSamples,
-          this.channelData[0].length
-        );
+        // Round to the nearest WHOLE MULTIPLE of the base loop (minimum 1×), so
+        // this track can be 1×, 2×, 4×… the length of the first one and still
+        // line up every cycle. Clamping to exactly 1× would force every track to
+        // the same duration, which the hardware does not do.
+        const master = this.engine.masterLoopLengthSamples;
+        const multiple = Math.max(1, Math.round(this.recordLength / master));
+        this.recordLength = Math.min(multiple * master, this.channelData[0].length);
       } else if (this._settings.quantize === 'measure') {
         this.recordLength = this.engine.quantizeLengthToMeasures(this.recordLength);
+      } else {
+        // AUTO with no master loop: the RC-505 does NOT force your first phrase
+        // onto the existing grid — it keeps the audio exactly as played and
+        // derives the tempo FROM it (power-of-two measures, 80–160 BPM). The
+        // memory tempo then follows what you actually played, which is why the
+        // hardware lands on values like 107 rather than snapping to 120.
+        // Only the FIRST phrase in the memory sets the tempo; a later track
+        // re-deriving would re-rate every loop recorded before it.
+        if (!this.engine.memoryTempoDerived) {
+          const derived = this.engine.deriveTempoFromLength(this.recordLength);
+          if (derived && derived.inRange) {
+            this.engine.tempo = derived.bpm;
+            this.engine.markMemoryTempoDerived();
+            // Playing back at the tempo it was derived from means rate = 1, so
+            // the phrase is heard exactly as recorded until the tempo is moved.
+            this._originalTempo = derived.bpm;
+          } else {
+            // No power-of-two measure count landed in the documented 80–160
+            // window. Perfectly normal for a deliberately short phrase (a
+            // one-bar hihat is under a second) — the phrase is kept exactly as
+            // played, we just can't infer a tempo from it, so the existing
+            // memory tempo stands rather than being replaced by a clamped guess.
+            console.info(
+              `[LoopTrack ${this.id}] MEASURE:AUTO found no tempo in a ` +
+                `${(this.recordLength / this.engine.sampleRate).toFixed(3)}s phrase; ` +
+                `keeping ${this.engine.tempo} BPM. The audio is unchanged.`
+            );
+          }
+        }
       }
     } else if (measure === 'free') {
       if (this._settings.quantize === 'measure') {
@@ -553,11 +759,8 @@ export class LoopTrack {
 
     this.isOverdubbing = true;
 
-    // Calculate write position from current loop position
-    const elapsed = this.engine.ctx.currentTime - this.loopStartTime;
-    const loopDuration = this.recordLength / this.engine.sampleRate;
-    const posInLoop = loopDuration > 0 ? elapsed % loopDuration : 0;
-    this.recordStartSample = Math.floor(posInLoop * this.engine.sampleRate);
+    // Calculate write position from the current (rate-aware) loop position.
+    this.recordStartSample = Math.floor(this.playbackPositionNormalized() * this.recordLength);
 
     // REPLACE2: mute playback during overdub (record over silently)
     if (this._settings.dubMode === 'replace2' && this.playbackSource) {
@@ -644,24 +847,25 @@ export class LoopTrack {
           if (this.recordLength >= targetLength) {
             this.recordLength = targetLength;
             requestAnimationFrame(() => {
-              if (this._state === 'recording') this.stopRecording();
+              if (this._state === 'recording') {
+                console.info(
+                  `[LoopTrack ${this.id}] Auto-stop: reached the fixed MEASURE count ` +
+                    `(${this._settings.measure} measures = ` +
+                    `${(targetLength / this.engine.sampleRate).toFixed(3)}s at ` +
+                    `${this.engine.tempo} BPM).`
+                );
+                this.stopRecording();
+              }
             });
           }
         }
 
-        // Auto-stop: MEASURE=AUTO with existing master loop
-        if (
-          this._settings.measure === 'auto' &&
-          this._settings.loopSync &&
-          this.engine.masterLoopLengthSamples > 0
-        ) {
-          if (this.recordLength >= this.engine.masterLoopLengthSamples) {
-            this.recordLength = this.engine.masterLoopLengthSamples;
-            requestAnimationFrame(() => {
-              if (this._state === 'recording') this.stopRecording();
-            });
-          }
-        }
+        // NOTE: MEASURE=AUTO deliberately does NOT auto-stop at the master loop
+        // length. Tracks may be longer than the base loop — a 4-bar part over a
+        // 2-bar one is normal — they just have to stay a whole multiple of it to
+        // remain phase-locked. The rounding happens in applyMeasureConstraints()
+        // when you stop. Hard-stopping here capped every track at exactly 1×,
+        // which is far more restrictive than the hardware.
       }
 
       // Pass audio through (silent — for ScriptProcessor keep-alive)
@@ -744,8 +948,13 @@ export class LoopTrack {
     this.playbackSource = this.engine.ctx.createBufferSource();
     this.playbackSource.buffer = buffer;
     this.playbackSource.loop = !this._settings.oneShot;
-    this.playbackSource.playbackRate.value = this.getPlaybackRate();
+    this.appliedRate = this.getPlaybackRate();
+    this.playbackSource.playbackRate.value = this.appliedRate;
+    // Fresh source starts on the direct path; routePlayback re-routes it through
+    // the pitch compensator if XFADE mode needs it.
     this.playbackSource.connect(this.gainNode);
+    this.shifterEngaged = false;
+    this.routePlayback(this.appliedRate);
 
     // LOOP SYNC: calculate start offset to align with master loop
     let startOffset = 0;
@@ -772,7 +981,9 @@ export class LoopTrack {
     }
 
     this.playbackSource.start(0, startOffset);
-    this.loopStartTime = this.engine.ctx.currentTime - startOffset;
+    // startOffset is buffer-time; convert to wall-clock via the playback rate.
+    const rate = this.appliedRate;
+    this.loopStartTime = this.engine.ctx.currentTime - (rate > 0 ? startOffset / rate : startOffset);
 
     // 1SHOT: auto-stop at end
     if (this._settings.oneShot) {
@@ -797,12 +1008,12 @@ export class LoopTrack {
       default: rate = 1.0;
     }
 
-    // TEMPO SYNC (pitch mode): adjust rate to match current tempo
-    if (
-      this._settings.tempoSyncSw &&
-      this._settings.tempoSyncMode === 'pitch' &&
-      this._originalTempo > 0
-    ) {
+    // TEMPO SYNC: follow the memory tempo relative to the tempo we recorded at.
+    // This applies in BOTH modes — the rate change is what makes the loop track
+    // the tempo at all. tempoSyncMode only decides what happens to the pitch:
+    // PITCH lets it ride along (varispeed), XFADE has routePlayback() transpose
+    // it back. Gating this on mode === 'pitch' silently disables tempo sync.
+    if (this._settings.tempoSyncSw && this._originalTempo > 0) {
       rate *= this.engine.tempo / this._originalTempo;
     }
 
@@ -850,16 +1061,14 @@ export class LoopTrack {
     if (this._state === 'stopping-at-loop-end') return;
     this.setState('stopping-at-loop-end');
 
-    const loopDuration = this.recordLength / this.engine.sampleRate;
+    const loopDuration = this.loopDurationAtRate(this.appliedRate);
     if (loopDuration <= 0) {
       this.stopPlaybackSource();
       this.setState('stopped');
       return;
     }
 
-    const elapsed = this.engine.ctx.currentTime - this.loopStartTime;
-    const posInLoop = ((elapsed % loopDuration) + loopDuration) % loopDuration;
-    const remaining = loopDuration - posInLoop;
+    const remaining = loopDuration * (1 - this.playbackPositionNormalized());
 
     this.loopEndTimer = setTimeout(() => {
       this.loopEndTimer = null;
@@ -1033,6 +1242,16 @@ export class LoopTrack {
    * Private Helpers
    * ═══════════════════════════════════════════════════════════ */
 
+  /** Release engine subscriptions held by this track. */
+  dispose(): void {
+    this.unsubscribeTempo?.();
+    this.unsubscribeTempo = null;
+    this.tempoShifter?.dispose();
+    this.tempoShifter = null;
+    this.shifterEngaged = false;
+    this.clear();
+  }
+
   private setState(state: TrackState): void {
     this._state = state;
     this.onStateChange?.(this.id, state);
@@ -1049,10 +1268,17 @@ export class LoopTrack {
         this._state === 'fading-out' ||
         this._state === 'stopping-at-loop-end'
       ) {
-        const elapsed = this.engine.ctx.currentTime - this.loopStartTime;
-        const loopDuration = this.recordLength / this.engine.sampleRate;
+        // Self-heal: if the target rate has moved (tempo/speed change) and the
+        // source hasn't caught up yet, re-rate here. applyTempoChange no-ops
+        // when nothing changed, so this is cheap.
+        this.applyTempoChange();
+
+        // Use the rate-adjusted duration so the indicator stays accurate when
+        // the tempo (and therefore playback rate) changes.
+        const loopDuration = this.loopDurationAtRate(this.appliedRate);
         if (loopDuration > 0) {
-          this._playbackPosition = (elapsed % loopDuration) / loopDuration;
+          const elapsed = this.engine.ctx.currentTime - this.loopStartTime;
+          this._playbackPosition = (((elapsed % loopDuration) + loopDuration) % loopDuration) / loopDuration;
         }
         this.positionRAF = requestAnimationFrame(tick);
       }

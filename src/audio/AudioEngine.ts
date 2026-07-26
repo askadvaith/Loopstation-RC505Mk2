@@ -8,6 +8,7 @@
 
 import { EffectsChain, FXSequencer } from './effects';
 import type { FXBankId, FXChainState } from './effects';
+import { tempoClock } from './effects/TempoClock';
 
 export class AudioEngine {
   private static instance: AudioEngine | null = null;
@@ -52,7 +53,9 @@ export class AudioEngine {
     this.inputAnalyser.fftSize = 2048;
 
     // Input FX chain: inputGain → inputFXChain → inputFXOutput → inputAnalyser
-    this.inputFXChain = new EffectsChain(this.ctx, false);
+    // The carrier resolver lets a Vocoder in Input FX use a loop track's audio
+    // as its carrier (the Track-5 "sequencer" trick).
+    this.inputFXChain = new EffectsChain(this.ctx, false, undefined, this.resolveCarrier);
     this.inputFXSequencer = new FXSequencer(this.inputFXChain);
 
     this.inputFXOutput = this.ctx.createGain();
@@ -149,10 +152,29 @@ export class AudioEngine {
   private _timeSignature = 4; // beats per measure
 
   get tempo(): number { return this._tempo; }
-  set tempo(bpm: number) { this._tempo = Math.max(40, Math.min(300, bpm)); }
+  set tempo(bpm: number) {
+    const next = Math.max(40, Math.min(300, bpm));
+    if (next === this._tempo) return;
+    this._tempo = next;
+    tempoClock.bpm = next; // keep tempo-synced effects in step
+    // Notify tracks so already-playing loops re-rate to the new tempo.
+    for (const listener of this.tempoListeners) listener(next);
+  }
+
+  /* Tempo-change listeners (LoopTracks subscribe to re-rate live playback). */
+  private tempoListeners = new Set<(bpm: number) => void>();
+
+  /** Subscribe to tempo changes. Returns an unsubscribe function. */
+  onTempoChange(listener: (bpm: number) => void): () => void {
+    this.tempoListeners.add(listener);
+    return () => { this.tempoListeners.delete(listener); };
+  }
 
   get timeSignature(): number { return this._timeSignature; }
-  set timeSignature(ts: number) { this._timeSignature = Math.max(1, Math.min(15, ts)); }
+  set timeSignature(ts: number) {
+    this._timeSignature = Math.max(1, Math.min(15, ts));
+    tempoClock.timeSignature = this._timeSignature;
+  }
 
   get samplesPerBeat(): number {
     return Math.round((60 / this._tempo) * this.sampleRate);
@@ -165,30 +187,80 @@ export class AudioEngine {
   /* Master Loop (established by first loop-synced recording) */
   private _masterLoopLengthSamples = 0;
   private _masterLoopStartTime = 0;
+  /** Tempo in effect when the master loop was captured (for tempo scaling). */
+  private _masterLoopBaseTempo = 120;
 
   get masterLoopLengthSamples(): number { return this._masterLoopLengthSamples; }
 
-  setMasterLoopLength(samples: number): void {
+  /**
+   * Track that established the master loop, or null if none has. Without this,
+   * clearing the track that defined the loop leaves its length in force forever
+   * (the all-tracks-empty reset never fires while any other track holds a
+   * phrase), so one bad short take silently truncates every later recording with
+   * no way out short of clearing everything.
+   */
+  private _masterLoopOwner: number | null = null;
+  get masterLoopOwner(): number | null { return this._masterLoopOwner; }
+
+  setMasterLoopLength(samples: number, ownerId?: number): void {
     this._masterLoopLengthSamples = samples;
+    this._masterLoopBaseTempo = this._tempo;
+    if (ownerId !== undefined) this._masterLoopOwner = ownerId;
+  }
+
+  /**
+   * Release the master loop if `trackId` is the track that defined it, letting
+   * the next loop-synced recording establish a fresh one. No-op otherwise.
+   */
+  releaseMasterLoopIfOwner(trackId: number): boolean {
+    if (this._masterLoopOwner !== trackId) return false;
+    this.resetMasterLoop();
+    return true;
   }
 
   setMasterLoopStartTime(time: number): void {
     this._masterLoopStartTime = time;
   }
 
+  /**
+   * Audible duration of the master loop in seconds. Tempo-synced tracks play
+   * back at (currentTempo / originalTempo), so the loop gets shorter as the
+   * tempo rises — sync and quantize math must follow that, not the raw samples.
+   */
+  get masterLoopDuration(): number {
+    if (this._masterLoopLengthSamples === 0) return 0;
+    const baseDuration = this._masterLoopLengthSamples / this.sampleRate;
+    const rate = this._masterLoopBaseTempo > 0 ? this._tempo / this._masterLoopBaseTempo : 1;
+    return rate > 0 ? baseDuration / rate : baseDuration;
+  }
+
   /** Get current position within the master loop (0–1 normalized). */
   getMasterLoopPosition(): number {
-    if (this._masterLoopLengthSamples === 0) return 0;
-    const elapsed = this.ctx.currentTime - this._masterLoopStartTime;
-    const loopDuration = this._masterLoopLengthSamples / this.sampleRate;
+    const loopDuration = this.masterLoopDuration;
     if (loopDuration <= 0) return 0;
-    return (elapsed % loopDuration) / loopDuration;
+    const elapsed = this.ctx.currentTime - this._masterLoopStartTime;
+    return ((elapsed % loopDuration) + loopDuration) % loopDuration / loopDuration;
   }
+
+  /**
+   * Whether the memory tempo has already been derived from a recorded phrase.
+   *
+   * MEASURE: AUTO derives the tempo from the FIRST phrase recorded into the
+   * memory, not from every phrase. With LOOP SYNC off there is no master loop to
+   * gate this, so without the flag each track's first recording would overwrite
+   * the memory tempo and every earlier loop would be re-rated under it.
+   */
+  private _memoryTempoDerived = false;
+  get memoryTempoDerived(): boolean { return this._memoryTempoDerived; }
+  markMemoryTempoDerived(): void { this._memoryTempoDerived = true; }
 
   /** Reset master loop (e.g. when all tracks are cleared). */
   resetMasterLoop(): void {
     this._masterLoopLengthSamples = 0;
     this._masterLoopStartTime = 0;
+    this._masterLoopBaseTempo = this._tempo;
+    this._masterLoopOwner = null;
+    this._memoryTempoDerived = false;
   }
 
   /* Play Mode */
@@ -203,6 +275,14 @@ export class AudioEngine {
   registerTrack(id: number, outputNode: AudioNode, getState: () => string): void {
     this.trackOutputNodes.set(id, { node: outputNode, getState });
   }
+
+  /**
+   * Resolve a track's output node for use as an external FX carrier (e.g. the
+   * Vocoder vocoding over Track 5). Arrow fn so it can be passed as a callback.
+   */
+  resolveCarrier = (trackId: number): AudioNode | null => {
+    return this.trackOutputNodes.get(trackId)?.node ?? null;
+  };
 
   /** Get output nodes of other tracks that are currently playing (for bounce). */
   getOtherTrackOutputNodes(excludeId: number): AudioNode[] {
@@ -226,7 +306,7 @@ export class AudioEngine {
     if (measureDuration <= 0) return this.ctx.currentTime;
 
     if (this._masterLoopLengthSamples > 0) {
-      const loopDuration = this._masterLoopLengthSamples / this.sampleRate;
+      const loopDuration = this.masterLoopDuration;
       const elapsed = this.ctx.currentTime - this._masterLoopStartTime;
       const pos = ((elapsed % loopDuration) + loopDuration) % loopDuration;
       const nextBoundary = Math.ceil(pos / measureDuration) * measureDuration;
@@ -236,6 +316,48 @@ export class AudioEngine {
 
     // No master loop — use absolute time
     return this.ctx.currentTime + measureDuration;
+  }
+
+  /**
+   * Derive a phrase's tempo from its recorded length, the way the RC-505 does
+   * with MEASURE: AUTO.
+   *
+   * The device does NOT stretch or pad your first recording onto the existing
+   * tempo grid — it assumes the phrase you just played is a power-of-two number
+   * of measures ("1, 2, 4, 8, 16...") and back-calculates the tempo, picking the
+   * measure count that lands the result in 80–160 BPM. Roland's own example:
+   * an 8-second recording in 4/4 is read as 4 measures → 120 BPM.
+   *
+   * Returns null if no sensible reading exists (e.g. a length too short to judge).
+   *
+   * `inRange` reports whether a power-of-two measure count actually landed in the
+   * documented 80–160 window. When it is false the phrase is too short or too long
+   * for the rule to say anything meaningful, and the bpm is only a clamped
+   * best-effort — callers should not commit it as the memory tempo.
+   */
+  deriveTempoFromLength(
+    lengthSamples: number
+  ): { bpm: number; measures: number; inRange: boolean } | null {
+    const seconds = lengthSamples / this.sampleRate;
+    if (seconds <= 0.05) return null;
+
+    const beatsPerMeasure = this._timeSignature;
+    let fallback: { bpm: number; measures: number; dist: number } | null = null;
+
+    for (let measures = 1; measures <= 64; measures *= 2) {
+      const bpm = (measures * beatsPerMeasure * 60) / seconds;
+      if (bpm >= 80 && bpm <= 160) {
+        return { bpm: Math.round(bpm * 10) / 10, measures, inRange: true };
+      }
+      // Track the candidate that misses the 80–160 window by the least, in case
+      // nothing lands inside it (very short or very long phrases).
+      const dist = bpm < 80 ? 80 - bpm : bpm - 160;
+      if (!fallback || dist < fallback.dist) fallback = { bpm, measures, dist };
+    }
+
+    if (!fallback) return null;
+    const clamped = Math.max(40, Math.min(300, fallback.bpm));
+    return { bpm: Math.round(clamped * 10) / 10, measures: fallback.measures, inRange: false };
   }
 
   /** Snap a sample length to the nearest whole number of measures. */
@@ -298,7 +420,7 @@ export class AudioEngine {
     if (this.trackFXChains.has(trackId)) {
       return this.trackFXChains.get(trackId)!;
     }
-    const chain = new EffectsChain(this.ctx, true);
+    const chain = new EffectsChain(this.ctx, true, undefined, this.resolveCarrier);
     const seq = new FXSequencer(chain);
     this.trackFXChains.set(trackId, chain);
     this.trackFXSequencers.set(trackId, seq);

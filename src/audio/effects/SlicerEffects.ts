@@ -5,6 +5,10 @@
 
 import { BaseEffect } from './BaseEffect';
 import type { EffectParamDef } from './BaseEffect';
+import { NOTE_VALUE_LABELS, noteValueMs } from './TempoClock';
+
+/** Default RATE index → 1/8 note (quaver), the common slicer rate. */
+const DEFAULT_RATE_IDX = Math.max(0, NOTE_VALUE_LABELS.indexOf('1/8'));
 
 /* ═══════════════════════════════════════════════════════════════
  * PATTERN SLICER — Rhythmic gate using pre-defined patterns
@@ -19,7 +23,6 @@ export class PatternSlicerEffect extends BaseEffect {
   private timerId: number | null = null;
   private stepIndex = 0;
   private pattern: number[] = [];
-  private stepDurationMs = 125;
 
   // 20 built-in slicer patterns (16 steps each, binary)
   private readonly patterns: number[][] = [
@@ -52,9 +55,11 @@ export class PatternSlicerEffect extends BaseEffect {
   getParamDefs(): EffectParamDef[] {
     return [
       { name: 'pattern', label: 'PATTERN', min: 1, max: 20, default: 1, step: 1 },
-      { name: 'rate', label: 'RATE', min: 0, max: 100, default: 50, sequenceable: true },
+      // RATE is a note value locked to the song tempo (quaver = 1/8 default).
+      { name: 'rate', label: 'RATE', min: 0, max: NOTE_VALUE_LABELS.length - 1, default: DEFAULT_RATE_IDX, step: 1, choices: NOTE_VALUE_LABELS },
+      // DEPTH controls how deep the gate cuts on "off" steps (100 = full cut).
+      { name: 'depth', label: 'DEPTH', min: 0, max: 120, default: 100, sequenceable: true },
       { name: 'attack', label: 'ATTACK', min: 0, max: 100, default: 10 },
-      { name: 'timing', label: 'TIMING', min: 0, max: 100, default: 50 },
       { name: 'dLevel', label: 'D.LEVEL', min: 0, max: 100, default: 0 },
       { name: 'eLevel', label: 'E.LEVEL', min: 0, max: 100, default: 100 },
     ];
@@ -102,16 +107,19 @@ export class PatternSlicerEffect extends BaseEffect {
   private tick = (): void => {
     const step = this.pattern[this.stepIndex % this.pattern.length];
     const now = this.ctx.currentTime;
-    const attackTime = (this.getParam('attack') ?? 10) / 1000; // 0-100ms
+    const attackTime = Math.max((this.getParam('attack') ?? 10) / 1000, 0.001); // 0-100ms
 
-    if (step) {
-      this.gateGain.gain.setTargetAtTime(1, now, Math.max(attackTime, 0.001));
-    } else {
-      this.gateGain.gain.setTargetAtTime(0, now, Math.max(attackTime, 0.001));
-    }
+    // DEPTH: how far the gate closes on "off" steps (0 = no cut, 100 = silent).
+    const depth = this.getParam('depth') ?? 100;
+    const offLevel = Math.max(0, Math.min(1, 1 - depth / 100));
+    this.gateGain.gain.setTargetAtTime(step ? 1 : offLevel, now, attackTime);
 
     this.stepIndex = (this.stepIndex + 1) % this.pattern.length;
-    this.timerId = window.setTimeout(this.tick, this.stepDurationMs);
+
+    // Step duration is derived live from the tempo clock so it tracks BPM changes.
+    const label = NOTE_VALUE_LABELS[Math.round(this.getParam('rate') ?? DEFAULT_RATE_IDX)] ?? '1/8';
+    const durMs = Math.max(10, noteValueMs(label));
+    this.timerId = window.setTimeout(this.tick, durMs);
   };
 
   applyParam(name: string, value: number): void {
@@ -121,16 +129,13 @@ export class PatternSlicerEffect extends BaseEffect {
         this.pattern = this.patterns[idx];
         break;
       }
-      case 'rate':
-        // Map 0-100 to 30ms-500ms per step
-        this.stepDurationMs = this.mapLinear(100 - value, 30, 500);
-        break;
       case 'dLevel':
         this.directGain.gain.setTargetAtTime(value / 100, this.ctx.currentTime, 0.01);
         break;
       case 'eLevel':
         this.effectGain.gain.setTargetAtTime(value / 100, this.ctx.currentTime, 0.01);
         break;
+      // 'rate' and 'depth' are read live inside tick().
     }
   }
 
@@ -155,7 +160,6 @@ export class StepSlicerEffect extends BaseEffect {
   private effectGain!: GainNode;
   private timerId: number | null = null;
   private stepIndex = 0;
-  private stepDurationMs = 125;
 
   // 16 step levels (0-100 mapped to gain 0-1)
   private steps: number[] = new Array(16).fill(100);
@@ -166,7 +170,7 @@ export class StepSlicerEffect extends BaseEffect {
 
   getParamDefs(): EffectParamDef[] {
     const defs: EffectParamDef[] = [
-      { name: 'rate', label: 'RATE', min: 0, max: 100, default: 50, sequenceable: true },
+      { name: 'rate', label: 'RATE', min: 0, max: NOTE_VALUE_LABELS.length - 1, default: DEFAULT_RATE_IDX, step: 1, choices: NOTE_VALUE_LABELS },
       { name: 'attack', label: 'ATTACK', min: 0, max: 100, default: 10 },
       { name: 'max', label: 'MAX', min: 1, max: 16, default: 16, step: 1 },
     ];
@@ -233,12 +237,15 @@ export class StepSlicerEffect extends BaseEffect {
     this.gateGain.gain.setTargetAtTime(stepValue, this.ctx.currentTime, Math.max(attackTime, 0.001));
 
     this.stepIndex = (this.stepIndex + 1) % maxSteps;
-    this.timerId = window.setTimeout(this.tick, this.stepDurationMs);
+
+    // Step duration derived live from tempo clock (tracks BPM changes).
+    const label = NOTE_VALUE_LABELS[Math.round(this.getParam('rate') ?? DEFAULT_RATE_IDX)] ?? '1/8';
+    this.timerId = window.setTimeout(this.tick, Math.max(10, noteValueMs(label)));
   };
 
   applyParam(name: string, value: number): void {
     if (name === 'rate') {
-      this.stepDurationMs = this.mapLinear(100 - value, 30, 500);
+      // Read live inside tick(); nothing to apply immediately.
     } else if (name === 'dLevel') {
       this.directGain.gain.setTargetAtTime(value / 100, this.ctx.currentTime, 0.01);
     } else if (name === 'eLevel') {

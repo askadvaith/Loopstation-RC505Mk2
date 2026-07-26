@@ -116,7 +116,17 @@ export function useAudioEngine(): AudioControls {
       prev = state;
     });
 
-    return () => { unsub(); };
+    // Reverse direction: recording a first phrase makes the engine derive the
+    // memory tempo from what was played (MEASURE: AUTO), so push that back into
+    // the store or the BPM readout would keep showing the old value.
+    // No feedback loop: the engine's setter early-returns on an unchanged value.
+    const unsubEngine = engine.onTempoChange((bpm) => {
+      if (useTransportStore.getState().tempo !== bpm) {
+        useTransportStore.getState().setTempo(bpm);
+      }
+    });
+
+    return () => { unsub(); unsubEngine(); };
   }, [engine]);
 
   /* Position tracking loop — polls track positions at ~30fps */
@@ -181,9 +191,20 @@ export function useAudioEngine(): AudioControls {
       tracks[idx].clear();
       useTrackStore.getState().resetTrack(idx);
 
-      // Reset master loop if no synced tracks have audio
-      const anyHasPhrase = tracks.some((t) => t.hasPhrase && t.settings.loopSync);
-      if (!anyHasPhrase) {
+      // Clearing the track that defined the master loop must release it, or its
+      // length keeps forcing every later recording even though the phrase it
+      // came from is gone. The next loop-synced recording then defines a new one.
+      if (engine.releaseMasterLoopIfOwner(idx)) {
+        console.info(
+          `[AudioEngine] Track ${idx + 1} owned the master loop; released it. ` +
+            `The next LOOP SYNC recording will set a new loop length.`
+        );
+      }
+
+      // Once no track holds any phrase the memory is empty, so release the master
+      // loop AND the derived-tempo latch — the next recording starts fresh and is
+      // free to set the memory tempo again.
+      if (!tracks.some((t) => t.hasPhrase)) {
         engine.resetMasterLoop();
       }
     },

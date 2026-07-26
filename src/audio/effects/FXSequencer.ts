@@ -173,11 +173,17 @@ export class FXSequencer {
   private tick = (): void => {
     if (!this.isRunning || !this.state.sw) return;
 
-    // Apply current step value to target parameter
+    // Apply current step value to target parameter. Step values are stored as
+    // 0–100; if the target param uses a different range (e.g. Robot NOTE 0–11),
+    // map onto it so a sequence can drive a melody rather than just 0–100 sweeps.
     if (this.state.target) {
       const { bankId, slotIdx, paramName } = this.state.target;
       const stepValue = this.state.values[this.stepIndex % this.state.max];
-      this.chain.setSlotParam(bankId, slotIdx, paramName, stepValue);
+      const range = this.chain.getSlotParamRange(bankId, slotIdx, paramName);
+      const out = (range && (range.min !== 0 || range.max !== 100))
+        ? range.min + (stepValue / 100) * (range.max - range.min)
+        : stepValue;
+      this.chain.setSlotParam(bankId, slotIdx, paramName, out);
     }
 
     // Advance step
