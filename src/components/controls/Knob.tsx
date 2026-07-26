@@ -23,6 +23,7 @@ export function Knob({
   value,
   min = 0,
   max = 1,
+  step,
   label,
   size = 48,
   onChange,
@@ -30,7 +31,7 @@ export function Knob({
   color = 'var(--knob-indicator)',
 }: KnobProps) {
   const knobRef = useRef<HTMLDivElement>(null);
-  const dragState = useRef<{ startY: number; startValue: number } | null>(null);
+  const dragState = useRef<{ startX: number; startY: number; startValue: number } | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
   // Normalize value to 0-1 range for rotation calculation
@@ -38,46 +39,62 @@ export function Knob({
   // Map 0-1 to -135° to +135° (270° sweep)
   const rotation = -135 + normalized * 270;
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  /** Clamp to range and snap to `step` if the param defines one. */
+  const quantize = useCallback(
+    (v: number) => {
+      const clamped = Math.max(min, Math.min(max, v));
+      if (!step || step <= 0) return clamped;
+      return Math.max(min, Math.min(max, min + Math.round((clamped - min) / step) * step));
+    },
+    [min, max, step]
+  );
+
+  const handlePointerDown = useCallback(
+    (e: React.PointerEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      dragState.current = { startY: e.clientY, startValue: value };
+      dragState.current = { startX: e.clientX, startY: e.clientY, startValue: value };
       setIsDragging(true);
+      // Capture so the drag keeps tracking even if the cursor leaves the knob.
+      (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
 
-      const handleMouseMove = (me: MouseEvent) => {
+      const handlePointerMove = (me: PointerEvent) => {
         if (!dragState.current) return;
+        // Respond to BOTH axes: up or right increases, down or left decreases.
+        // Vertical-only tracking made natural arc-style drags (right + slightly
+        // down) read as a decrease, so the knob appeared to snap back left.
         const deltaY = dragState.current.startY - me.clientY;
+        const deltaX = me.clientX - dragState.current.startX;
+        const delta = Math.abs(deltaY) >= Math.abs(deltaX) ? deltaY : deltaX;
+
         const sensitivity = me.shiftKey ? 600 : 200; // Fine control with shift
         const range = max - min;
-        const newValue = Math.max(
-          min,
-          Math.min(max, dragState.current.startValue + (deltaY / sensitivity) * range)
-        );
-        onChange(newValue);
+        onChange(quantize(dragState.current.startValue + (delta / sensitivity) * range));
       };
 
-      const handleMouseUp = () => {
+      const handlePointerUp = () => {
         dragState.current = null;
         setIsDragging(false);
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+        window.removeEventListener('pointercancel', handlePointerUp);
       };
 
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
+      window.addEventListener('pointermove', handlePointerMove);
+      window.addEventListener('pointerup', handlePointerUp);
+      window.addEventListener('pointercancel', handlePointerUp);
     },
-    [value, min, max, onChange]
+    [value, min, max, onChange, quantize]
   );
 
   const handleWheel = useCallback(
     (e: React.WheelEvent) => {
       e.preventDefault();
-      const step = (max - min) / 100;
-      const delta = e.deltaY < 0 ? step : -step;
-      onChange(Math.max(min, Math.min(max, value + delta)));
+      const increment = step && step > 0 ? step : (max - min) / 100;
+      const delta = e.deltaY < 0 ? increment : -increment;
+      onChange(quantize(value + delta));
     },
-    [value, min, max, onChange]
+    [value, max, min, step, onChange, quantize]
   );
 
   const displayValue = formatValue
@@ -89,7 +106,7 @@ export function Knob({
       {/* Knob body */}
       <div
         ref={knobRef}
-        className={`relative rounded-full cursor-grab transition-shadow ${
+        className={`relative rounded-full cursor-grab touch-none transition-shadow ${
           isDragging ? 'cursor-grabbing ring-2 ring-white/20' : ''
         }`}
         style={{
@@ -102,7 +119,7 @@ export function Knob({
             inset 0 -1px 0 rgba(0,0,0,0.3)
           `,
         }}
-        onMouseDown={handleMouseDown}
+        onPointerDown={handlePointerDown}
         onWheel={handleWheel}
         title={`${label ?? ''}: ${displayValue}`}
       >

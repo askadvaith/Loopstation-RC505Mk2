@@ -78,9 +78,11 @@ const defaultTrackState = (): TrackUIState => ({
   stopMode: 'immediate',
   fadeTimeIn: 2,
   fadeTimeOut: 2,
-  loopSync: true,
-  tempoSyncSw: false,
-  tempoSyncMode: 'pitch',
+  // Must mirror LoopTrack's DEFAULT_SETTINGS so the UI reflects real state.
+  // OFF is the hardware default — tracks keep independent lengths.
+  loopSync: false,
+  tempoSyncSw: true,
+  tempoSyncMode: 'xfade',
   speed: 'normal',
   measure: 'auto',
   quantize: 'off',

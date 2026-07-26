@@ -9,9 +9,17 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useFXStore, type FXEditTarget } from '../../store/useFXStore';
 import { getEffectTypeDef, getEffectLabel } from '../../audio/effects';
-import type { FXBankId } from '../../audio/effects';
+import type { EffectParamDef, FXBankId } from '../../audio/effects';
 import { Knob } from '../controls/Knob';
 import { FXTypePicker } from './FXTypePicker';
+
+/** Human-readable value for a parameter: choice label, or number + unit. */
+function formatParamValue(def: EffectParamDef, value: number): string {
+  if (def.choices && def.choices.length > 0) {
+    return def.choices[Math.round(value)] ?? '?';
+  }
+  return `${Math.round(value)}${def.unit ? ` ${def.unit}` : ''}`;
+}
 
 interface FXEditScreenProps {
   editTarget: NonNullable<FXEditTarget>;
@@ -35,6 +43,10 @@ export function FXEditScreen({ editTarget, onSetFXType, onSetSlotSw, onSetSlotPa
     return chain.banks[bankId].slots[slotIdx];
   });
 
+  // Real-time editor cursor (moved by ← →, driven live from the keyboard).
+  const focusedParamIdx = useFXStore((s) => s.focusedParamIdx);
+  const setFocusedParamIdx = useFXStore((s) => s.setFocusedParamIdx);
+
   // Get effect param definitions
   const paramDefs = useMemo(() => {
     const def = getEffectTypeDef(slot.fxType);
@@ -42,6 +54,11 @@ export function FXEditScreen({ editTarget, onSetFXType, onSetSlotSw, onSetSlotPa
   }, [slot.fxType]);
 
   const fxLabel = useMemo(() => getEffectLabel(slot.fxType), [slot.fxType]);
+
+  // The parameter the cursor is on (clamped in case the effect type changed).
+  const safeFocusIdx = Math.min(focusedParamIdx, Math.max(0, paramDefs.length - 1));
+  const focusedDef = paramDefs[safeFocusIdx];
+  const focusedValue = focusedDef ? (slot.params[focusedDef.name] ?? focusedDef.default) : 0;
 
   const handleParamChange = useCallback((paramName: string, value: number) => {
     onSetSlotParam(editTarget.context, trackIdx, bankId, slotIdx, paramName, value);
@@ -101,6 +118,21 @@ export function FXEditScreen({ editTarget, onSetFXType, onSetSlotSw, onSetSlotPa
         </button>
       </div>
 
+      {/* Focused-parameter readout — the RC-505 CURSOR + VALUE target.
+          ← → move between parameters, ↑ ↓ change this value (hold to sweep). */}
+      {focusedDef && (
+        <div className="mx-3 mb-1 px-3 py-1.5 rounded bg-zinc-800/70 border border-[var(--led-amber)]/40 flex items-center justify-between gap-2">
+          <span className="text-[10px] tracking-[0.15em] text-zinc-400 truncate">
+            {focusedDef.label}
+            {focusedDef.sequenceable && <span className="text-[var(--led-amber)] ml-0.5">★</span>}
+          </span>
+          <span className="text-[15px] font-mono font-bold text-[var(--led-amber)] leading-none">
+            {formatParamValue(focusedDef, focusedValue)}
+          </span>
+          <span className="text-[8px] text-zinc-600 tracking-wide whitespace-nowrap">← → · ↑ ↓</span>
+        </div>
+      )}
+
       {/* Parameters */}
       <div className="flex-1 overflow-y-auto px-2 py-1">
         {paramDefs.length === 0 ? (
@@ -109,14 +141,23 @@ export function FXEditScreen({ editTarget, onSetFXType, onSetSlotSw, onSetSlotPa
           </div>
         ) : (
           <div className="grid grid-cols-4 gap-1">
-            {paramDefs.map((def) => {
+            {paramDefs.map((def, idx) => {
               const currentValue = slot.params[def.name] ?? def.default;
+              const isFocused = idx === safeFocusIdx;
 
               if (def.choices && def.choices.length > 0) {
                 // Choice-based parameter: show as button cycle
                 const choiceIdx = Math.round(currentValue);
                 return (
-                  <div key={def.name} className="flex flex-col items-center gap-0.5">
+                  <div
+                  key={def.name}
+                  onClick={() => setFocusedParamIdx(idx)}
+                  className={`flex flex-col items-center gap-0.5 rounded p-0.5 cursor-pointer transition-colors ${
+                    isFocused
+                      ? 'bg-[var(--led-amber)]/10 ring-1 ring-[var(--led-amber)]/50'
+                      : 'hover:bg-zinc-800/40'
+                  }`}
+                >
                     <button
                       className="w-full px-1 py-1 bg-zinc-800/60 border border-zinc-700/40 rounded text-[9px] text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/40 cursor-pointer transition-colors text-center"
                       onClick={() => {
@@ -137,7 +178,15 @@ export function FXEditScreen({ editTarget, onSetFXType, onSetSlotSw, onSetSlotPa
 
               // Numeric parameter: show as knob
               return (
-                <div key={def.name} className="flex flex-col items-center gap-0.5">
+                <div
+                  key={def.name}
+                  onClick={() => setFocusedParamIdx(idx)}
+                  className={`flex flex-col items-center gap-0.5 rounded p-0.5 cursor-pointer transition-colors ${
+                    isFocused
+                      ? 'bg-[var(--led-amber)]/10 ring-1 ring-[var(--led-amber)]/50'
+                      : 'hover:bg-zinc-800/40'
+                  }`}
+                >
                   <Knob
                     value={currentValue}
                     min={def.min}

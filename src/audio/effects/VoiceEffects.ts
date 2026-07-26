@@ -22,6 +22,18 @@ export class VocoderEffect extends BaseEffect {
   private carrierGain!: GainNode;
   private carrierOsc!: OscillatorNode;
 
+  /**
+   * External carrier support (Goal 2a): the synthesis bank can be driven either
+   * by the internal oscillator OR by an external audio source (e.g. another
+   * loop track). `carrierInput` is the entry point an external source connects
+   * to; `carrierBus` sums whichever carrier is active and feeds all synth bands.
+   */
+  readonly carrierInput: GainNode;
+  private carrierBus!: GainNode;
+  private oscBusGain!: GainNode;
+  /** Bookkeeping for EffectsChain: the node currently wired into carrierInput. */
+  carrierSrc: AudioNode | null = null;
+
   private static readonly BAND_COUNT = 12;
   private static readonly BAND_FREQS = [
     100, 200, 400, 630, 900, 1200, 1600, 2200, 3000, 4000, 5500, 8000
@@ -29,17 +41,40 @@ export class VocoderEffect extends BaseEffect {
 
   constructor(ctx: AudioContext) {
     super(ctx);
+    // Created here (not buildGraph) so an external source can be wired even
+    // before/independently of the DSP graph being (re)built.
+    this.carrierInput = ctx.createGain();
+    this.carrierInput.gain.value = 0; // off until external carrier selected
   }
 
   getParamDefs(): EffectParamDef[] {
     return [
-      { name: 'carrier', label: 'CARRIER', min: 0, max: 4, default: 0, choices: ['SAW', 'SQUARE', 'NOISE', 'OSC1', 'OSC2'] },
+      // 0–2 = internal oscillator; 3–7 = external carrier from TRACK 1–5.
+      { name: 'carrier', label: 'CARRIER', min: 0, max: 7, default: 0, choices: ['SAW', 'SQUARE', 'NOISE', 'TRK1', 'TRK2', 'TRK3', 'TRK4', 'TRK5'] },
       { name: 'tone', label: 'TONE', min: 0, max: 100, default: 50 },
       { name: 'attack', label: 'ATTACK', min: 0, max: 100, default: 30 },
       { name: 'modSens', label: 'MOD SENS', min: 0, max: 100, default: 50 },
       { name: 'balance', label: 'BALANCE', min: 0, max: 100, default: 50, sequenceable: true },
       { name: 'carrierThru', label: 'CARRIER THRU', min: 0, max: 100, default: 0 },
     ];
+  }
+
+  /** True when the carrier param selects a track (external) rather than an OSC. */
+  static carrierIsExternal(value: number): boolean {
+    return Math.round(value) >= 3;
+  }
+
+  /** Track index (0-based) for an external carrier value, or null for internal. */
+  static carrierTrackId(value: number): number | null {
+    const idx = Math.round(value);
+    return idx >= 3 ? idx - 3 : null;
+  }
+
+  /** Switch the synth bank between the internal oscillator and the external input. */
+  setExternalCarrier(on: boolean): void {
+    const t = this.ctx.currentTime;
+    this.oscBusGain.gain.setTargetAtTime(on ? 0 : 1, t, 0.01);
+    this.carrierInput.gain.setTargetAtTime(on ? 1 : 0, t, 0.01);
   }
 
   buildGraph(): void {
@@ -54,11 +89,22 @@ export class VocoderEffect extends BaseEffect {
     this.carrierGain = this.ctx.createGain();
     this.carrierGain.gain.value = 0;
 
-    // Carrier oscillator (sawtooth default — rich harmonics for vocoding)
+    // Carrier bus: whichever carrier is active feeds all synth bands from here.
+    this.carrierBus = this.ctx.createGain();
+    this.carrierBus.gain.value = 1;
+
+    // Internal carrier oscillator (sawtooth default — rich harmonics).
     this.carrierOsc = this.ctx.createOscillator();
     this.carrierOsc.type = 'sawtooth';
-    this.carrierOsc.frequency.value = 110; // Fundamental carrier pitch
+    this.carrierOsc.frequency.value = 110;
     this.carrierOsc.start();
+    this.oscBusGain = this.ctx.createGain();
+    this.oscBusGain.gain.value = 1; // internal carrier on by default
+    this.carrierOsc.connect(this.oscBusGain);
+    this.oscBusGain.connect(this.carrierBus);
+
+    // External carrier (a track's audio) routes in through carrierInput.
+    this.carrierInput.connect(this.carrierBus);
 
     // Create analysis (modulator) and synthesis (carrier) filter banks
     for (let i = 0; i < VocoderEffect.BAND_COUNT; i++) {
@@ -71,7 +117,7 @@ export class VocoderEffect extends BaseEffect {
       analysisBP.Q.value = 5;
       this.analysisBands.push(analysisBP);
 
-      // Synthesis band: filters carrier at same frequency
+      // Synthesis band: filters the carrier bus at same frequency
       const synthBP = this.ctx.createBiquadFilter();
       synthBP.type = 'bandpass';
       synthBP.frequency.value = freq;
@@ -84,9 +130,9 @@ export class VocoderEffect extends BaseEffect {
       this.bandGains.push(bandGain);
 
       // Route: input → analysis band (amplitude tracking done via JS)
-      // Carrier → synth band → bandGain → effectGain → output
+      // Carrier bus → synth band → bandGain → effectGain → output
       this.inputNode.connect(analysisBP);
-      this.carrierOsc.connect(synthBP);
+      this.carrierBus.connect(synthBP);
       synthBP.connect(bandGain);
       bandGain.connect(this.effectGain);
     }
@@ -98,8 +144,8 @@ export class VocoderEffect extends BaseEffect {
     // Wet path
     this.effectGain.connect(this.outputNode);
 
-    // Carrier thru
-    this.carrierOsc.connect(this.carrierGain);
+    // Carrier thru (monitors the raw carrier bus)
+    this.carrierBus.connect(this.carrierGain);
     this.carrierGain.connect(this.outputNode);
 
     // Start envelope follower (uses requestAnimationFrame for simple tracking)
@@ -149,8 +195,14 @@ export class VocoderEffect extends BaseEffect {
     switch (name) {
       case 'carrier':
         {
-          const types: OscillatorType[] = ['sawtooth', 'square', 'triangle', 'sine', 'sine'];
-          this.carrierOsc.type = types[Math.round(value)] || 'sawtooth';
+          if (VocoderEffect.carrierIsExternal(value)) {
+            // Track carrier: actual source wiring is done by EffectsChain.
+            this.setExternalCarrier(true);
+          } else {
+            const types: OscillatorType[] = ['sawtooth', 'square', 'triangle'];
+            this.carrierOsc.type = types[Math.round(value)] || 'sawtooth';
+            this.setExternalCarrier(false);
+          }
         }
         break;
       case 'tone':
@@ -176,6 +228,9 @@ export class VocoderEffect extends BaseEffect {
     this.carrierOsc.stop();
     this.carrierOsc.disconnect();
     this.carrierGain.disconnect();
+    this.oscBusGain.disconnect();
+    this.carrierBus.disconnect();
+    try { this.carrierInput.disconnect(); } catch { /* ok */ }
     for (const b of this.analysisBands) b.disconnect();
     for (const b of this.synthBands) b.disconnect();
     for (const g of this.bandGains) g.disconnect();
@@ -517,18 +572,61 @@ export class HarmonistAutoEffect extends BaseEffect {
 }
 
 /* ═══════════════════════════════════════════════════════════════
- * OSC BOT — Oscillator-based voice synthesis bot
+ * OSC BOT — Oscillator that plays a NOTE (for melodies + the sequencer)
+ *
+ * Hardware: "Plays the oscillator to match the value in the NOTE parameter.
+ * This plays melodies and other phrases in combination with the sequencer."
+ * So OSC BOT is a SYNTH whose pitch is set by NOTE (a real note range, driven
+ * live via ← → or stepped by the FX Sequencer). The audio input only *modulates*
+ * it (MOD SENS); BALANCE mixes in the dry voice.
+ *
+ * The old implementation kept 50% dry voice regardless of BALANCE (the "voice
+ * in the background") and had no note range, so it could not play a melody.
+ * This version outputs a clean oscillator (default BALANCE = full effect, no
+ * dry) and uses a pure audio-graph envelope so it renders offline too.
  * ═══════════════════════════════════════════════════════════════ */
+
+const OSC_PITCH_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const OSC_BOT_MIN_MIDI = 36; // C2
+const OSC_BOT_MAX_MIDI = 84; // C6
+const OSC_BOT_NOTE_NAMES = Array.from(
+  { length: OSC_BOT_MAX_MIDI - OSC_BOT_MIN_MIDI + 1 },
+  (_, i) => {
+    const m = OSC_BOT_MIN_MIDI + i;
+    return OSC_PITCH_NAMES[m % 12] + (Math.floor(m / 12) - 1);
+  }
+);
+/** Frequency (Hz) for an OSC BOT NOTE index (0 = C2). */
+function oscBotNoteFreq(noteIdx: number): number {
+  const midi = OSC_BOT_MIN_MIDI + Math.round(noteIdx);
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+/** WaveShaper curve: full-wave rectify (|x|), for a graph-based envelope. */
+function absCurve(n = 2048) {
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.abs(x); }
+  return c;
+}
+/** WaveShaper curve: clamp to [0,1]. */
+function clamp01Curve(n = 2048) {
+  const c = new Float32Array(n);
+  for (let i = 0; i < n; i++) { const x = (i / (n - 1)) * 2 - 1; c[i] = Math.min(1, Math.max(0, x)); }
+  return c;
+}
 
 export class OSCBotEffect extends BaseEffect {
   readonly type = 'OSC_BOT';
 
   private osc!: OscillatorNode;
-  private oscGain!: GainNode;
-  private directGain!: GainNode;
-  private filter!: BiquadFilterNode;
-  private analyser!: AnalyserNode;
-  private envelopeActive = false;
+  private toneFilter!: BiquadFilterNode;
+  private oscVCA!: GainNode;
+  private directGain!: GainNode;   // dry voice (BALANCE)
+  private effectGain!: GainNode;   // wet oscillator (BALANCE)
+  // Offline-safe envelope follower (no AnalyserNode / requestAnimationFrame).
+  private envRectify!: WaveShaperNode;
+  private envSmooth!: BiquadFilterNode;
+  private envScale!: GainNode;
+  private envClamp!: WaveShaperNode;
 
   constructor(ctx: AudioContext) {
     super(ctx);
@@ -536,95 +634,125 @@ export class OSCBotEffect extends BaseEffect {
 
   getParamDefs(): EffectParamDef[] {
     return [
-      { name: 'oscPitch', label: 'OSC PITCH', min: 0, max: 100, default: 50 },
-      { name: 'oscWave', label: 'OSC WAVE', min: 0, max: 3, default: 0, choices: ['SAW', 'SQR', 'TRI', 'SIN'] },
-      { name: 'tone', label: 'TONE', min: 0, max: 100, default: 50 },
-      { name: 'sensitivity', label: 'SENS', min: 0, max: 100, default: 50 },
-      { name: 'balance', label: 'BALANCE', min: 0, max: 100, default: 50, sequenceable: true },
+      // NOTE spans a real melodic range and is ★-sequenceable, so the FX
+      // Sequence (or live ← →) can play a melody. Default D#3 matches the
+      // reference performance's starting note.
+      { name: 'note', label: 'NOTE', min: 0, max: OSC_BOT_NOTE_NAMES.length - 1, default: 15, step: 1, choices: OSC_BOT_NOTE_NAMES, sequenceable: true },
+      { name: 'oscWave', label: 'OSC', min: 0, max: 4, default: 0, choices: ['SAW', 'VINT SAW', 'DTNE SAW', 'SQR', 'RECT'] },
+      { name: 'tone', label: 'TONE', min: -50, max: 50, default: 0 },
+      { name: 'attack', label: 'ATTACK', min: 0, max: 100, default: 0 },
+      { name: 'modSens', label: 'MOD SENS', min: 0, max: 100, default: 50 },
+      // BALANCE 100 = pure oscillator (no dry voice). The hardware default is 50,
+      // but that bleeds the raw voice; turn it down to blend your voice back in.
+      { name: 'balance', label: 'BALANCE', min: 0, max: 100, default: 100, sequenceable: true },
     ];
+  }
+
+  private noteFreq(): number {
+    return oscBotNoteFreq(this.getParam('note') ?? 15);
   }
 
   buildGraph(): void {
     this.inputNode.disconnect();
 
+    // BALANCE mixes dry voice (direct) against the oscillator (effect).
     this.directGain = this.ctx.createGain();
-    this.directGain.gain.value = 0.5;
-
-    this.osc = this.ctx.createOscillator();
-    this.osc.type = 'sawtooth';
-    this.osc.frequency.value = 220;
-
-    this.filter = this.ctx.createBiquadFilter();
-    this.filter.type = 'lowpass';
-    this.filter.frequency.value = 2000;
-    this.filter.Q.value = 3;
-
-    this.oscGain = this.ctx.createGain();
-    this.oscGain.gain.value = 0;
-
-    this.osc.connect(this.filter);
-    this.filter.connect(this.oscGain);
-    this.oscGain.connect(this.outputNode);
-    this.osc.start();
-
+    this.directGain.gain.value = 0; // full effect by default (set by balance)
     this.inputNode.connect(this.directGain);
     this.directGain.connect(this.outputNode);
 
-    // Envelope follower to modulate OSC amplitude
-    this.analyser = this.ctx.createAnalyser();
-    this.analyser.fftSize = 256;
-    this.inputNode.connect(this.analyser);
+    this.effectGain = this.ctx.createGain();
+    this.effectGain.gain.value = 1;
+    this.effectGain.connect(this.outputNode);
 
-    this.envelopeActive = true;
-    this.followEnvelope();
+    // Oscillator at NOTE.
+    this.osc = this.ctx.createOscillator();
+    this.osc.type = 'sawtooth';
+    this.osc.frequency.value = this.noteFreq();
+    this.osc.start();
+
+    this.toneFilter = this.ctx.createBiquadFilter();
+    this.toneFilter.type = 'lowpass';
+    this.toneFilter.frequency.value = 6000;
+    this.toneFilter.Q.value = 0.7;
+
+    // The oscillator plays at a floor level; the voice envelope opens it further
+    // (MOD SENS = how much). So it works stepped by the sequencer (no input) AND
+    // gated by singing "ah".
+    this.oscVCA = this.ctx.createGain();
+    this.oscVCA.gain.value = 0.35;
+
+    this.osc.connect(this.toneFilter);
+    this.toneFilter.connect(this.oscVCA);
+    this.oscVCA.connect(this.effectGain);
+
+    // Offline-safe envelope follower feeding oscVCA.gain (adds to the floor).
+    this.envRectify = this.ctx.createWaveShaper();
+    this.envRectify.curve = absCurve();
+    this.envSmooth = this.ctx.createBiquadFilter();
+    this.envSmooth.type = 'lowpass';
+    this.envSmooth.frequency.value = 16;
+    this.envScale = this.ctx.createGain();
+    this.envScale.gain.value = 3; // scaled by MOD SENS in applyParam
+    this.envClamp = this.ctx.createWaveShaper();
+    this.envClamp.curve = clamp01Curve();
+
+    this.inputNode.connect(this.envRectify);
+    this.envRectify.connect(this.envSmooth);
+    this.envSmooth.connect(this.envScale);
+    this.envScale.connect(this.envClamp);
+    this.envClamp.connect(this.oscVCA.gain);
   }
-
-  private followEnvelope = (): void => {
-    if (!this.envelopeActive) return;
-    const buffer = new Float32Array(128);
-    this.analyser.getFloatTimeDomainData(buffer);
-    let rms = 0;
-    for (let i = 0; i < buffer.length; i++) rms += buffer[i] * buffer[i];
-    rms = Math.sqrt(rms / buffer.length);
-
-    const sens = (this.getParam('sensitivity') ?? 50) / 25;
-    const level = Math.min(rms * sens, 1);
-    this.oscGain.gain.setTargetAtTime(level * 0.5, this.ctx.currentTime, 0.02);
-
-    requestAnimationFrame(this.followEnvelope);
-  };
 
   applyParam(name: string, value: number): void {
     switch (name) {
-      case 'oscPitch':
-        this.osc.frequency.setTargetAtTime(
-          this.mapLinear(value, 55, 880), this.ctx.currentTime, 0.01
-        );
+      case 'note':
+        this.osc.frequency.setTargetAtTime(this.noteFreq(), this.ctx.currentTime, 0.01);
         break;
       case 'oscWave': {
-        const types: OscillatorType[] = ['sawtooth', 'square', 'triangle', 'sine'];
-        this.osc.type = types[Math.round(value)] || 'sawtooth';
+        // SAW / VINTAGE SAW / DETUNE SAW → sawtooth; SQUARE / RECT → square.
+        const idx = Math.round(value);
+        this.osc.type = idx >= 3 ? 'square' : 'sawtooth';
+        this.osc.detune.setTargetAtTime(idx === 2 ? 10 : 0, this.ctx.currentTime, 0.01); // DETUNE SAW
         break;
       }
       case 'tone':
-        this.filter.frequency.setTargetAtTime(
-          this.mapFrequency(value), this.ctx.currentTime, 0.02
+        // -50..+50 → darker..brighter low-pass.
+        this.toneFilter.frequency.setTargetAtTime(
+          this.mapLinear(value + 50, 700, 12000), this.ctx.currentTime, 0.02
         );
         break;
+      case 'attack':
+        // More attack = slower envelope response (lower follower cutoff).
+        this.envSmooth.frequency.setTargetAtTime(
+          this.mapLinear(100 - value, 4, 30), this.ctx.currentTime, 0.02
+        );
+        break;
+      case 'modSens': {
+        const sens = value / 100; // 0..1
+        // 0 → oscillator plays continuously; 1 → fully gated by the voice.
+        this.oscVCA.gain.setTargetAtTime(0.6 * (1 - sens) + 0.02, this.ctx.currentTime, 0.02);
+        this.envScale.gain.setTargetAtTime(6 * sens, this.ctx.currentTime, 0.02);
+        break;
+      }
       case 'balance':
-        this.directGain.gain.setTargetAtTime(1 - value / 100, this.ctx.currentTime, 0.01);
+        this.directGain.gain.setTargetAtTime((100 - value) / 100, this.ctx.currentTime, 0.01);
+        this.effectGain.gain.setTargetAtTime(value / 100, this.ctx.currentTime, 0.01);
         break;
     }
   }
 
   dispose(): void {
-    this.envelopeActive = false;
     this.osc.stop();
     this.osc.disconnect();
-    this.oscGain.disconnect();
-    this.filter.disconnect();
-    this.analyser.disconnect();
+    this.toneFilter.disconnect();
+    this.oscVCA.disconnect();
+    this.envRectify.disconnect();
+    this.envSmooth.disconnect();
+    this.envScale.disconnect();
+    this.envClamp.disconnect();
     this.directGain.disconnect();
+    this.effectGain.disconnect();
     super.dispose();
   }
 }
